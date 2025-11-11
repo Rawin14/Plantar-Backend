@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  # API Gateway (Node.js)
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - NODE_ENV=development
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - ML_SERVICE_URL=http://ml-service:8000
+    depends_on:
+      - ml-service
+    volumes:
+      - ./api-gateway/src:/app/src
+    networks:
+      - plantar-network
+
+  # ML Service (Python)
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_SERVICE_KEY}
+    volumes:
+      - ./ml-service:/app
+    networks:
+      - plantar-network
+
+networks:
+  plantar-network:
+    driver: bridge
