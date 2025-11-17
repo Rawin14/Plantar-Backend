@@ -4,12 +4,18 @@ httpx==0.26.0
 pydantic==2.6.0
 python-dotenv==1.0.1
 
-# Future ML libraries (uncomment when needed)
+# Image Processing (เพิ่มตอนพัฒนา ML จริง)
 # numpy==1.26.3
 # opencv-python==4.9.0.80
 # pillow==10.2.0
 # scipy==1.12.0
+
+# ML Libraries (เพิ่มตอนพัฒนา ML จริง)
 # scikit-learn==1.4.0
-# open3d==0.18.0
+# tensorflow==2.15.0
 # torch==2.1.2
 # torchvision==0.16.2
+
+# 3D Processing (เพิ่มตอนพัฒนา ML จริง)
+# open3d==0.18.0
+# trimesh==4.0.10
