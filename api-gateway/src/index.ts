@@ -1,7 +1,9 @@
+import dotenv from 'dotenv';
+// Load environment variables
+dotenv.config();
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
-import dotenv from 'dotenv';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -9,8 +11,6 @@ import profileRoutes from './routes/profile';
 import scanRoutes from './routes/scan';
 import shoeRoutes from './routes/shoes';
 
-// Load environment variables
-dotenv.config();
 
 const fastify = Fastify({
   logger: {
