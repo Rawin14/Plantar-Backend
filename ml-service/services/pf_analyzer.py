@@ -140,4 +140,95 @@ class PlantarFasciitisAnalyzer:
         else:
             indicators['foot_alignment_score'] = 60.0
         
-        # 5. Flexibility Score (ย
+        # 5. Flexibility Score (ยืดหยุ่นน้อย = เสี่ยงสูง)
+        indicators['flexibility_score'] = (1 - flexibility) * 100
+        
+        # Calculate overall PF score (weighted average)
+        weights = {
+            'arch_collapse_score': 0.30,
+            'heel_pain_index': 0.25,
+            'pressure_distribution_score': 0.20,
+            'foot_alignment_score': 0.15,
+            'flexibility_score': 0.10
+        }
+        
+        pf_score = sum(
+            indicators[key] * weight
+            for key, weight in weights.items()
+        )
+        
+        # Determine severity
+        if pf_score < 33:
+            severity = "low"
+            severity_thai = "ต่ำ"
+        elif pf_score < 67:
+            severity = "medium"
+            severity_thai = "กลาง"
+        else:
+            severity = "high"
+            severity_thai = "สูง"
+        
+        # Risk factors
+        risk_factors = []
+        if arch_type == "flat":
+            risk_factors.append("เท้าแบน (Flat feet)")
+        if arch_type == "high":
+            risk_factors.append("โค้งเท้าสูง (High arch)")
+        if heel_pressure > 0.7:
+            risk_factors.append("แรงกดส้นเท้าสูง")
+        if flexibility < 0.5:
+            risk_factors.append("ความยืดหยุ่นน้อย")
+        if pressure_std > 0.25:
+            risk_factors.append("การกระจายน้ำหนักไม่สมดุล")
+        
+        # Recommendations
+        recommendations = self._generate_recommendations(severity, arch_type)
+        
+        return {
+            "severity": severity,
+            "severity_thai": severity_thai,
+            "score": round(pf_score, 1),
+            "arch_type": arch_type,
+            "indicators": {k: round(v, 1) for k, v in indicators.items()},
+            "risk_factors": risk_factors,
+            "recommendations": recommendations
+        }
+    
+    def _calculate_std(self, values: List[float]) -> float:
+        """คำนวณ standard deviation"""
+        n = len(values)
+        if n < 2:
+            return 0
+        
+        mean = sum(values) / n
+        variance = sum((x - mean) ** 2 for x in values) / n
+        return variance ** 0.5
+    
+    def _generate_recommendations(
+        self,
+        severity: str,
+        arch_type: str
+    ) -> List[str]:
+        """สร้างคำแนะนำ"""
+        recommendations = []
+        
+        if severity == "high":
+            recommendations.append("ควรพบแพทย์เฉพาะทางโดยเร็ว")
+            recommendations.append("หลีกเลี่ยงกิจกรรมที่ต้องยืนหรือเดินนาน")
+            recommendations.append("ใช้แผ่นรองเท้าพิเศษ (Orthotic insole)")
+        
+        if severity == "medium":
+            recommendations.append("ควรพักเท้าให้เพียงพอ")
+            recommendations.append("ทำแบบฝึกหัดยืดเส้นเอ็นเท้า")
+            recommendations.append("เลือกรองเท้าที่รองรับโค้งเท้าดี")
+        
+        if severity == "low":
+            recommendations.append("ทำแบบฝึกหัดเสริมกล้ามเนื้อเท้า")
+            recommendations.append("เลือกรองเท้าที่เหมาะสมกับรูปเท้า")
+        
+        if arch_type == "flat":
+            recommendations.append("เลือกรองเท้าที่มี arch support ระดับสูง")
+        elif arch_type == "high":
+            recommendations.append("เลือกรองเท้าที่มี cushioning ดี")
+        
+        return recommendations

@@ -63,7 +63,6 @@ class PFShoeMatcher:
             
             scored_shoes.append({
                 "scan_id": scan_id,
-                "shoe_id": shoe.get("id"),
                 "shoe_name": shoe.get("model"),
                 "brand": shoe.get("brand"),
                 "category": shoe.get("category"),
