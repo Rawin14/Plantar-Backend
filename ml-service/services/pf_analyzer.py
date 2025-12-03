@@ -92,7 +92,8 @@ class PlantarFasciitisAnalyzer:
     
     def assess_plantar_fasciitis(
         self,
-        foot_analysis: Dict[str, Any]
+        foot_analysis: Dict[str, Any],
+        questionnaire_score: float = 0.0  # ✅ 1. เพิ่ม parameter รับคะแนนแบบสอบถาม
     ) -> Dict[str, Any]:
         """
         ประเมินความรุนแรงของรองช้ำ
@@ -104,9 +105,9 @@ class PlantarFasciitisAnalyzer:
         4. Pressure distribution (การกระจายน้ำหนัก)
         5. Foot alignment (การวางเท้า)
         
-        TODO: Implement ML model trained on medical data
+        Combined with Questionnaire Score (Max 10)
         """
-        logger.info(f"🏥 Assessing plantar fasciitis...")
+        logger.info(f"🏥 Assessing plantar fasciitis... (Questionnaire: {questionnaire_score}/10)")
         
         arch_type = foot_analysis['arch_type']
         arch_ratio = foot_analysis['arch_height_ratio']
@@ -143,7 +144,7 @@ class PlantarFasciitisAnalyzer:
         # 5. Flexibility Score (ยืดหยุ่นน้อย = เสี่ยงสูง)
         indicators['flexibility_score'] = (1 - flexibility) * 100
         
-        # Calculate overall PF score (weighted average)
+        # Calculate overall Scan PF score (weighted average)
         weights = {
             'arch_collapse_score': 0.30,
             'heel_pain_index': 0.25,
@@ -152,16 +153,27 @@ class PlantarFasciitisAnalyzer:
             'flexibility_score': 0.10
         }
         
-        pf_score = sum(
+        # คะแนนดิบจากการสแกน (เต็ม 100)
+        scan_score_raw = sum(
             indicators[key] * weight
             for key, weight in weights.items()
         )
         
-        # Determine severity
-        if pf_score < 33:
+        # ✅ 2. ปรับสูตรคำนวณคะแนนรวม
+        # แปลงคะแนนสแกนให้เหลือเต็ม 10
+        scan_score_10 = scan_score_raw / 10.0
+        
+        # รวมคะแนน (Scan 10 + Questionnaire 10 = 20)
+        total_score_20 = scan_score_10 + questionnaire_score
+        
+        # แปลงกลับเป็น % (0-100) สำหรับเก็บลง DB และคำนวณ Severity
+        final_pf_score = (total_score_20 / 20.0) * 100.0
+        
+        # Determine severity (ใช้เกณฑ์ใหม่ตามคะแนนรวม)
+        if final_pf_score < 40:
             severity = "low"
             severity_thai = "ต่ำ"
-        elif pf_score < 67:
+        elif final_pf_score < 70:
             severity = "medium"
             severity_thai = "กลาง"
         else:
@@ -184,10 +196,14 @@ class PlantarFasciitisAnalyzer:
         # Recommendations
         recommendations = self._generate_recommendations(severity, arch_type)
         
+        # ✅ 3. บันทึกคะแนนย่อยลง indicators เพื่อดูรายละเอียดได้
+        indicators['scan_part_score'] = round(scan_score_10, 1)
+        indicators['questionnaire_part_score'] = round(questionnaire_score, 1)
+        
         return {
             "severity": severity,
             "severity_thai": severity_thai,
-            "score": round(pf_score, 1),
+            "score": round(final_pf_score, 1), # คะแนนรวมที่เป็น %
             "arch_type": arch_type,
             "indicators": {k: round(v, 1) for k, v in indicators.items()},
             "risk_factors": risk_factors,

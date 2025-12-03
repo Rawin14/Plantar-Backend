@@ -103,6 +103,7 @@ app.add_middleware(
 class ProcessRequest(BaseModel):
     scan_id: str
     image_urls: List[str] = Field(..., min_items=3)
+    questionnaire_score: float = 0.0
 
 class ProcessResponse(BaseModel):
     success: bool
@@ -172,8 +173,9 @@ async def process_scan(
         # Queue background task
         background_tasks.add_task(
             process_pf_assessment,
-            scan_id,
-            image_urls
+            request.scan_id,
+            request.image_urls,
+            request.questionnaire_score
         )
         
         logger.info(f"✅ Scan {scan_id} queued for PF assessment")
@@ -194,7 +196,7 @@ async def process_scan(
 
 # ===== Background Processing =====
 
-async def process_pf_assessment(scan_id: str, image_urls: List[str]):
+async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnaire_score: float = 0.0): 
     """Background task: ประมวลผลและประเมินอาการรองช้ำ"""
     try:
         logger.info(f"🔄 Starting PF assessment for {scan_id}")
@@ -210,9 +212,11 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str]):
         logger.info(f"✅ Analysis: arch={foot_analysis['arch_type']}")
         
         # 3. Assess plantar fasciitis
-        logger.info(f"🏥 Assessing plantar fasciitis...")
-        pf_assessment = analyzer.assess_plantar_fasciitis(foot_analysis)
+        logger.info(f"🏥 Assessing plantar fasciitis with Questionnaire Score: {questionnaire_score}")
+        pf_assessment = analyzer.assess_plantar_fasciitis(foot_analysis, questionnaire_score)
         logger.info(f"✅ PF Score: {pf_assessment['score']}, Severity: {pf_assessment['severity']}")
+
+
         
         # 4. Update scan with results
         await storage.update_scan(
