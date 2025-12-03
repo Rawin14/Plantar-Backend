@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { authenticate } from '../middleware/auth';
 import { supabase } from '../services/supabase';
 import { z } from 'zod';
-import fetch from 'node-fetch';
+// import fetch from 'node-fetch';
 
 const createScanSchema = z.object({
   foot_side: z.enum(['left', 'right']),
