@@ -91,9 +91,9 @@ export default async function scanRoutes(fastify: FastifyInstance) {
           scan_id: scan.id,
           image_urls: body.images_url
         })
-      }).catch(err => {
-        console.error('Failed to trigger ML processing:', err);
-      });
+     }).catch((err: any) => { 
+  console.error('Failed to trigger ML processing:', err);
+    });
 
       return scan;
 
