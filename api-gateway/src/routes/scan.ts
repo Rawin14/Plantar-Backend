@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 const createScanSchema = z.object({
   foot_side: z.enum(['left', 'right']),
-  images_url: z.array(z.string().url()).min(3)
+  images_url: z.array(z.string().url()).min(1)
 });
 
 export default async function scanRoutes(fastify: FastifyInstance) {

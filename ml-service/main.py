@@ -105,7 +105,7 @@ app.add_middleware(
 
 class ProcessRequest(BaseModel):
     scan_id: str
-    image_urls: List[str] = Field(..., min_items=3)
+    image_urls: List[str] = Field(..., min_items=1)
     questionnaire_score: float = 0.0
 
 class ProcessResponse(BaseModel):
