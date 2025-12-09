@@ -215,7 +215,8 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
         logger.info(f"🏥 Assessing plantar fasciitis with Questionnaire Score: {questionnaire_score}")
         pf_assessment = analyzer.assess_plantar_fasciitis(foot_analysis, questionnaire_score)
         logger.info(f"✅ PF Score: {pf_assessment['score']}, Severity: {pf_assessment['severity']}")
-
+    
+        mock_model_url = "https://developer.apple.com/augmented-reality/quick-look/models/nike-pegasus/sneaker_pegasustrail.usdz"
 
         
         # 4. Update scan with results
@@ -225,6 +226,7 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
             pf_score=pf_assessment['score'],
             arch_type=pf_assessment['arch_type'],
             foot_analysis=foot_analysis,
+            model_3d_url=mock_model_url,
             status="completed"
         )
         

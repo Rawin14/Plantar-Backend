@@ -69,6 +69,7 @@ class SupabaseStorage:
         pf_score: Optional[float] = None,
         arch_type: Optional[str] = None,
         foot_analysis: Optional[Dict] = None,
+        model_3d_url: Optional[str] = None,
         status: Optional[str] = None,
         error_message: Optional[str] = None
     ):
@@ -87,6 +88,9 @@ class SupabaseStorage:
             
             if foot_analysis:
                 update_data["foot_analysis"] = foot_analysis
+
+            if model_3d_url: 
+                update_data["model_3d_url"] = model_3d_url
             
             if status:
                 update_data["status"] = status
