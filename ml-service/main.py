@@ -18,6 +18,7 @@ from services.pf_analyzer import PlantarFasciitisAnalyzer
 from services.exercise_recommender import ExerciseRecommender
 from services.matcher import PFShoeMatcher
 from services.storage import SupabaseStorage
+from services.processor import ImageProcessor
 
 # ===== Load Environment =====
 load_dotenv()
@@ -46,6 +47,7 @@ storage = None
 analyzer = None
 exercise_recommender = None
 shoe_matcher = None
+processor = None
 
 # ===== Lifespan Context Manager (แทน on_event) =====
 @asynccontextmanager
@@ -56,7 +58,7 @@ async def lifespan(app: FastAPI):
     - Shutdown: cleanup
     """
     # ===== Startup =====
-    global storage, analyzer, exercise_recommender, shoe_matcher
+    global storage, analyzer, exercise_recommender, shoe_matcher, processor
     
     logger.info("🚀 Plantar Fasciitis Analysis Service starting...")
     
@@ -65,6 +67,7 @@ async def lifespan(app: FastAPI):
     analyzer = PlantarFasciitisAnalyzer()
     exercise_recommender = ExerciseRecommender()
     shoe_matcher = PFShoeMatcher(storage)
+    processor = ImageProcessor()
     
     # Check Supabase connection
     is_connected = await storage.check_connection()
@@ -218,17 +221,12 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
 
         real_model_url = None
         
-        
-        model_data = analyzer.generate_3d_model(images) # ต้องไปเพิ่ม method นี้ใน analyzer หรือเรียก processor โดยตรง
-        # หรือถ้าเรียกผ่าน processor:
-        # model_data = processor.generate_3d_model(images)
+        # ใช้ processor.generate_3d_model แทน analyzer.generate_3d_model
+        model_data = processor.generate_3d_model(images) 
         
         if model_data:
-            # 2. ถ้ามีข้อมูลไฟล์กลับมา ให้ทำการอัปโหลด (Storage)
             logger.info("📤 Uploading generated 3D model...")
             real_model_url = await storage.upload_model_file(scan_id, model_data)
-    
-
         
         # 4. Update scan with results
         await storage.update_scan(
