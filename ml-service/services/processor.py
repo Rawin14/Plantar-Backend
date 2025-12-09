@@ -70,23 +70,25 @@ class ImageProcessor:
         - open3d
         - pytorch3d
         """
-        logger.info(f"🔨 Generating 3D model from {len(images)} images (MOCK)")
+        logger.info(f"🔨 Generating 3D model from {len(images)} images...")
         
         # Mock 3D model data
-        model = {
-            "format": "obj",
-            "vertices": [],
-            "faces": [],
-            "normals": [],
-            "textures": [],
-            "metadata": {
-                "num_images": len(images),
-                "algorithm": "photogrammetry_mock",
-                "quality": "high"
-            }
-        }
-        
-        return model
+        try:
+            # --- พื้นที่สำหรับใส่ Algorithm Photogrammetry ของจริง ---
+            # ตัวอย่างเช่นเรียกใช้ Open3D, AliceVision, หรือ COLMAP
+            # ซึ่งต้องใช้ทรัพยากรเครื่องสูงมาก
+            
+            # สมมติว่าประมวลผลเสร็จแล้วได้ไฟล์ออกมา
+            # with open("temp_output.usdz", "rb") as f:
+            #     return f.read()
+            
+            # ⚠️ ระหว่างที่ยังไม่มี Algorithm จริง ให้ return None ไปก่อน
+            # เพื่อให้ระบบรู้ว่าไม่มีโมเดล ไม่ใช่ส่ง Mock มั่วๆ ไป
+            return None 
+            
+        except Exception as e:
+            logger.error(f"❌ Error generating 3D model: {e}")
+            return None
     
     def extract_measurements(self, model_3d: Dict[str, Any]) -> Dict[str, float]:
         """

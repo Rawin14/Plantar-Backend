@@ -43,8 +43,8 @@ class PFShoeMatcher:
         all_shoes = await self.storage.get_all_shoes()
         
         if not all_shoes:
-            logger.warning("⚠️ No shoes in database")
-            all_shoes = self._get_mock_pf_shoes()
+            logger.error("❌ Database is empty! Please seed data.")
+            return []
         
         # Score and filter shoes
         scored_shoes = []

@@ -215,8 +215,19 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
         logger.info(f"🏥 Assessing plantar fasciitis with Questionnaire Score: {questionnaire_score}")
         pf_assessment = analyzer.assess_plantar_fasciitis(foot_analysis, questionnaire_score)
         logger.info(f"✅ PF Score: {pf_assessment['score']}, Severity: {pf_assessment['severity']}")
+
+        real_model_url = None
+        
+        
+        model_data = analyzer.generate_3d_model(images) # ต้องไปเพิ่ม method นี้ใน analyzer หรือเรียก processor โดยตรง
+        # หรือถ้าเรียกผ่าน processor:
+        # model_data = processor.generate_3d_model(images)
+        
+        if model_data:
+            # 2. ถ้ามีข้อมูลไฟล์กลับมา ให้ทำการอัปโหลด (Storage)
+            logger.info("📤 Uploading generated 3D model...")
+            real_model_url = await storage.upload_model_file(scan_id, model_data)
     
-        mock_model_url = "https://developer.apple.com/augmented-reality/quick-look/models/nike-pegasus/sneaker_pegasustrail.usdz"
 
         
         # 4. Update scan with results
@@ -226,7 +237,7 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
             pf_score=pf_assessment['score'],
             arch_type=pf_assessment['arch_type'],
             foot_analysis=foot_analysis,
-            model_3d_url=mock_model_url,
+            model_3d_url=real_model_url,
             status="completed"
         )
         
@@ -240,10 +251,10 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
         logger.info(f"✅ Saved {len(exercises)} exercises")
         
         # 7. Find suitable shoes
-        logger.info(f"👟 Finding suitable shoes...")
-        shoes = await shoe_matcher.find_pf_shoes(scan_id, pf_assessment)
-        await storage.save_shoe_recommendations(shoes)
-        logger.info(f"✅ Saved {len(shoes)} shoe recommendations")
+        # logger.info(f"👟 Finding suitable shoes...")
+        # shoes = await shoe_matcher.find_pf_shoes(scan_id, pf_assessment)
+        # await storage.save_shoe_recommendations(shoes)
+        # logger.info(f"✅ Saved {len(shoes)} shoe recommendations")
         
         logger.info(f"✅ PF assessment completed for {scan_id}")
         

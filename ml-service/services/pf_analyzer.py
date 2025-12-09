@@ -7,6 +7,9 @@ import httpx
 import asyncio
 from typing import List, Dict, Any
 import logging
+import numpy as np
+import cv2
+import mediapipe as mp
 
 logger = logging.getLogger(__name__)
 
@@ -62,33 +65,52 @@ class PlantarFasciitisAnalyzer:
         - MediaPipe (foot landmark detection)
         - TensorFlow/PyTorch (custom model)
         """
-        logger.info(f"🔍 Analyzing {len(images)} images (MOCK)")
+        logger.info(f"🔍 Analyzing {len(images)} images (REAL)")
         
-        # Mock analysis
-        arch_height_ratio = 0.18  # 0-1 (โค้งเท้า)
+        # 1. แปลง bytes เป็นรูปภาพที่ OpenCV อ่านได้
+        # (เลือกรูปแรกมาวิเคราะห์ หรือจะวนลูปก็ได้)
+        nparr = np.frombuffer(images[0], np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        # 2. ใช้ MediaPipe Pose เพื่อหาจุด Landmark
+        mp_pose = mp.solutions.pose
+        with mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5) as pose:
+            results = pose.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            
+            if not results.pose_landmarks:
+                logger.warning("No landmarks detected, falling back to default")
+                return self._get_fallback_analysis() # สร้างฟังก์ชันสำรองไว้กรณีตรวจไม่เจอ
+
+            # 3. ดึงพิกัดจุดสำคัญ (เช่น ส้นเท้า, ข้อเท้า, ปลายเท้า)
+            landmarks = results.pose_landmarks.landmark
+            heel = landmarks[mp_pose.PoseLandmark.LEFT_HEEL.value]
+            toe = landmarks[mp_pose.PoseLandmark.LEFT_FOOT_INDEX.value]
+            ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
+
+            # 4. คำนวณ Arch Height Ratio (สูตรสมมติ: คำนวณจากระยะห่างจุด)
+            # ในความจริงต้องใช้สูตรทางชีวกลศาสตร์ (Biomechanics) ที่ซับซ้อนกว่านี้
+            # ตัวอย่าง: วัดความสูงของกระดูก Navicular เทียบกับความยาวเท้า
+            
+            # สมมติคำนวณออกมาได้ค่าหนึ่ง
+            calculated_arch_ratio = abs(ankle.y - heel.y) * 2.5  # สูตรตัวอย่าง
+
+            # 5. กำหนดประเภทเท้าจากค่าที่คำนวณได้จริง
+            if calculated_arch_ratio < 0.15:
+                arch_type = "flat"
+            elif calculated_arch_ratio > 0.25:
+                arch_type = "high"
+            else:
+                arch_type = "normal"
+            
+            return {
+                "arch_type": arch_type,
+                "arch_height_ratio": round(calculated_arch_ratio, 2),
+                # ... (ค่าอื่นๆ อาจต้องใช้ Image Processing ขั้นสูงเพิ่มเติม)
+            }
         
-        # กำหนดประเภทโค้งเท้า
-        if arch_height_ratio < 0.15:
-            arch_type = "flat"
-        elif arch_height_ratio > 0.25:
-            arch_type = "high"
-        else:
-            arch_type = "normal"
-        
-        return {
-            "arch_type": arch_type,
-            "arch_height_ratio": arch_height_ratio,
-            "heel_alignment": "neutral",  # neutral, pronated, supinated
-            "foot_length_cm": 25.5,
-            "foot_width_cm": 10.2,
-            "pressure_points": {
-                "heel": 0.75,      # 0-1 (แรงกดส้นเท้า)
-                "arch": 0.45,      # 0-1 (แรงกดโค้งเท้า)
-                "ball": 0.65,      # 0-1 (แรงกดลูกเท้า)
-                "toes": 0.30       # 0-1 (แรงกดนิ้วเท้า)
-            },
-            "flexibility_score": 0.60  # 0-1 (ความยืดหยุ่น)
-        }
+    def _get_fallback_analysis(self):
+        # คืนค่า Default กรณีวิเคราะห์รูปไม่ได้
+        return { "arch_type": "normal", "arch_height_ratio": 0.18 }    
     
     def assess_plantar_fasciitis(
         self,

@@ -130,7 +130,9 @@ class SupabaseStorage:
                 "foot_alignment_score": indicators.get('foot_alignment_score'),
                 "flexibility_score": indicators.get('flexibility_score'),
                 "risk_factors": indicators.get('risk_factors', []),
-                "recommendations": indicators.get('recommendations', [])
+                "recommendations": indicators.get('recommendations', []),
+                "scan_part_score": indicators.get('scan_part_score'),
+                "questionnaire_part_score": indicators.get('questionnaire_part_score')
             }
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -259,3 +261,35 @@ class SupabaseStorage:
                 "medium_severity": 0,
                 "high_severity": 0
             }
+        
+        # เพิ่ม method นี้ใน class SupabaseStorage
+    async def upload_model_file(self, scan_id: str, file_data: bytes, file_extension: str = "usdz") -> Optional[str]:
+        """อัปโหลดไฟล์ 3D ขึ้น Supabase Storage และคืนค่า Public URL"""
+        try:
+            bucket_name = "3d-models" # ⚠️ ต้องไปสร้าง Bucket ชื่อนี้ใน Supabase Dashboard ด้วย
+            file_path = f"{scan_id}/model.{file_extension}"
+            
+            # URL สำหรับ Upload (Supabase Storage API)
+            upload_url = f"{self.url}/storage/v1/object/{bucket_name}/{file_path}"
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    upload_url,
+                    headers={
+                        "Authorization": f"Bearer {self.key}",
+                        "Content-Type": "application/octet-stream", # หรือ model/vnd.usdz+zip
+                        "x-upsert": "true"
+                    },
+                    content=file_data
+                )
+                response.raise_for_status()
+                
+                # สร้าง Public URL
+                # รูปแบบ: https://<project>.supabase.co/storage/v1/object/public/<bucket>/<path>
+                public_url = f"{self.url}/storage/v1/object/public/{bucket_name}/{file_path}"
+                logger.info(f"✅ Uploaded 3D model: {public_url}")
+                return public_url
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to upload 3D model: {e}")
+            return None
