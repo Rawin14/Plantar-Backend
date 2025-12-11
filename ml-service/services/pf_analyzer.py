@@ -68,8 +68,9 @@ class PlantarFasciitisAnalyzer:
             
             # กรณีไม่เจอเท้า ให้ใช้ค่า Default
             if not results.pose_landmarks:
-                logger.warning("⚠️ No landmarks detected, using fallback")
-                return self._get_fallback_analysis() # <--- ต้องแก้ฟังก์ชันนี้ด้วย (ดูด้านล่าง)
+                logger.warning("⚠️ No landmarks detected")
+                # โยน Error ออกไป เพื่อให้ main.py จับได้และเปลี่ยน status เป็น failed
+                raise ValueError("ไม่พบเท้าในรูปภาพ กรุณาถ่ายให้เห็นข้อเท้าและฝ่าเท้าชัดเจน")
 
             # 3. ดึงพิกัดจุดสำคัญ
             landmarks = results.pose_landmarks.landmark
