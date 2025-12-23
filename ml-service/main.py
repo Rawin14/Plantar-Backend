@@ -107,6 +107,7 @@ class ProcessRequest(BaseModel):
     scan_id: str
     image_urls: List[str] = Field(..., min_items=1)
     questionnaire_score: float = 0.0
+    bmi_score: int = 0
 
 class ProcessResponse(BaseModel):
     success: bool
@@ -178,7 +179,8 @@ async def process_scan(
             process_pf_assessment,
             request.scan_id,
             request.image_urls,
-            request.questionnaire_score
+            request.questionnaire_score,
+            request.bmi_score
         )
         
         logger.info(f"✅ Scan {scan_id} queued for PF assessment")
@@ -199,7 +201,7 @@ async def process_scan(
 
 # ===== Background Processing =====
 
-async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnaire_score: float = 0.0): 
+async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnaire_score: float = 0.0, bmi_score: int = 0): 
     """Background task: ประมวลผลและประเมินอาการรองช้ำ"""
     try:
         logger.info(f"🔄 Starting PF assessment for {scan_id}")
@@ -216,7 +218,11 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
         
         # 3. Assess plantar fasciitis
         logger.info(f"🏥 Assessing plantar fasciitis with Questionnaire Score: {questionnaire_score}")
-        pf_assessment = analyzer.assess_plantar_fasciitis(foot_analysis, questionnaire_score)
+        pf_assessment = analyzer.assess_plantar_fasciitis(
+        foot_analysis, 
+        questionnaire_score,
+        bmi_score 
+    )
         logger.info(f"✅ PF Score: {pf_assessment['score']}, Severity: {pf_assessment['severity']}")
 
         real_model_url = None
