@@ -71,7 +71,8 @@ class SupabaseStorage:
         foot_analysis: Optional[Dict] = None,
         model_3d_url: Optional[str] = None,
         status: Optional[str] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
+        foot_side: Optional[str] = None
     ):
         """อัปเดต scan"""
         try:
@@ -91,6 +92,9 @@ class SupabaseStorage:
 
             if model_3d_url: 
                 update_data["model_3d_url"] = model_3d_url
+
+            if foot_side:  # ✅ 2. เพิ่ม Logic บันทึกค่า
+                update_data["foot_side"] = foot_side
             
             if status:
                 update_data["status"] = status
