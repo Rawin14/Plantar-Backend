@@ -14,6 +14,8 @@ import cv2
 logger = logging.getLogger(__name__)
 
 class PlantarFasciitisAnalyzer:
+    """วิเคราะห์อาการรองช้ำจากรอยเท้า (ใช้สูตร MBE + Perimeter จากงานวิจัย)"""
+    
     def __init__(self):
         self.timeout = httpx.Timeout(30.0)
         logger.info("🔧 Initializing PF Analyzer (Research Method: MBE + P)")
@@ -23,19 +25,30 @@ class PlantarFasciitisAnalyzer:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             tasks = [self._download_single(client, url) for url in urls]
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if result and not isinstance(result, Exception):
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning(f"⚠️ Failed to download image {i+1}: {result}")
+                    continue
+                if result:
                     images.append(result)
-        if not images: raise ValueError("No images downloaded")
+        if not images:
+            raise ValueError("No images downloaded")
         return images
     
     async def _download_single(self, client: httpx.AsyncClient, url: str) -> bytes:
         try:
-            resp = await client.get(url); resp.raise_for_status(); return resp.content
-        except: return None
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.content
+        except Exception as e:
+            logger.error(f"Failed to download {url}: {e}")
+            return None
 
     def _calculate_curvature(self, contour):
-        """คำนวณค่าความโค้ง (Curvature) ของเส้นรอบรูป [cite: 776]"""
+        """
+        คำนวณค่าความโค้ง (Curvature) ของเส้นรอบรูป
+        เพื่อนำไปหา Mean Bending Energy (MBE)
+        """
         # contour shape: (N, 1, 2)
         pts = contour.squeeze().astype(float)
         x = pts[:, 0]
@@ -54,56 +67,91 @@ class PlantarFasciitisAnalyzer:
         # ป้องกันการหารด้วยศูนย์
         curvature = np.divide(numerator, denominator, out=np.zeros_like(numerator), where=denominator!=0)
         return curvature
-
+    
     def analyze_foot_structure(self, images: List[bytes]) -> Dict[str, Any]:
-        logger.info(f"🔍 Analyzing images with Research Method (MBE+P)...")
+        """
+        วิเคราะห์รอยเท้าเปียกด้วยสมการ MBE + Perimeter
+        พร้อมระบุข้างเท้าอัตโนมัติ (Auto-Detect Side)
+        """
+        logger.info(f"🔍 Analyzing {len(images)} footprint images (Research Method)")
         
-        if not images: raise ValueError("ไม่พบรูปภาพ")
-
+        if not images:
+             raise ValueError("ไม่พบรูปภาพสำหรับวิเคราะห์")
+             
         try:
-            # 1. Prepare Image
+            # 1. แปลง Bytes เป็น OpenCV Image
             nparr = np.frombuffer(images[0], np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
-            # ✅ Normalization: Resize ให้ความสูงมาตรฐาน (สำคัญมากสำหรับสมการนี้)
-            # งานวิจัยใช้ Pixel Count เป็นตัวแปร P ดังนั้นต้องคุม Scale ให้คงที่
-            target_height = 800 
+            if img is None:
+                raise ValueError("ไม่สามารถอ่านไฟล์รูปภาพได้")
+
+            # ✅ Normalization: Resize ให้ความสูงมาตรฐาน (800px)
+            # สำคัญมาก! เพราะสมการถดถอย (-7.351e-5 * P) ขึ้นอยู่กับจำนวนพิกเซล
+            # ถ้าภาพใหญ่เกินไป ค่า P จะมหาศาลทำให้ผลเพี้ยน
+            target_height = 800
             h, w = img.shape[:2]
             scale = target_height / h
             new_w = int(w * scale)
             img = cv2.resize(img, (new_w, target_height))
-            
-            # 2. Pre-processing
+
+            # ---------------------------------------------------------
+            # 2. Pre-processing & Validation
+            # ---------------------------------------------------------
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Check Brightness
+            mean_brightness = np.mean(gray)
+            if mean_brightness < 40: raise ValueError("รูปภาพมืดเกินไป")
+            if mean_brightness > 250: raise ValueError("รูปภาพสว่างเกินไป")
+
+            # Blur & Threshold
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
             _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             
+            # Find Contour
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours: raise ValueError("ไม่พบรอยเท้า")
+            if not contours: raise ValueError("ไม่พบรอยเท้าในภาพ")
             largest_contour = max(contours, key=cv2.contourArea)
+            
+            # Sanity Check
+            contour_area = cv2.contourArea(largest_contour)
+            img_area = img.shape[0] * img.shape[1]
+            if contour_area < 2000: raise ValueError("รอยเท้าเล็กเกินไป")
+            if (contour_area / img_area) > 0.90: raise ValueError("วัตถุเต็มหน้าจอเกินไป")
 
             # ---------------------------------------------------------
-            # 🔬 Research Method Calculation (MBE + P)
+            # 🤖 Feature: Auto-Detect Foot Side (Left/Right)
+            # ---------------------------------------------------------
+            M = cv2.moments(largest_contour)
+            cx = int(M["m10"] / M["m00"]) if M["m00"] != 0 else 0
+            center_line = img.shape[1] // 2
+            
+            # จุดศูนย์ถ่วงอยู่ซ้าย = เท้าซ้าย, ขวา = เท้าขวา
+            detected_side = "left" if cx < center_line else "right"
+            logger.info(f"🦶 Auto-detected Side: {detected_side.upper()} (Centroid X: {cx})")
+
+            # ---------------------------------------------------------
+            # 🔬 Research Method: Calculation (MBE + P)
             # ---------------------------------------------------------
             
-            # 1. Perimeter (P): PDF ระบุว่า P = จำนวน pixel ขอบ * (pi/4) [cite: 757]
+            # 1. Perimeter (P): ตาม PDF คือจำนวน pixel ขอบ * (pi/4)
             # ใช้ len(contour) เพื่อนับจำนวนจุดขอบ
             num_boundary_pixels = len(largest_contour)
             P = num_boundary_pixels * (np.pi / 4)
             
-            # 2. Mean Bending Energy (MBE): ค่าเฉลี่ยของ curvature^2 [cite: 807]
+            # 2. Mean Bending Energy (MBE): ค่าเฉลี่ยของ curvature^2
             curvature = self._calculate_curvature(largest_contour)
             MBE = np.mean(curvature ** 2)
             
-            # 3. Apply Equation (6) จาก PDF 
+            # 3. Apply Equation (6) จาก PDF
             # AHI = (-7.351e-5 * P) - (1050.964 * MBE) + 0.4597
-            # สังเกต: PDF ใช้ค่า P เป็นลบ และ MBE เป็นลบ เพื่อให้ค่าต่ำ = High Arch
             research_score = (-7.351e-5 * P) - (1050.964 * MBE) + 0.4597
             
             logger.info(f"📊 Research Score: {research_score:.4f} (P={P:.1f}, MBE={MBE:.6f})")
 
             # ---------------------------------------------------------
-            # 4. Classification (New Cut-offs from Figure 6) 
+            # 4. Classification (Cut-offs from Figure 6)
             # ---------------------------------------------------------
             # High Arch: <= 0.23
             # Normal: 0.23 - 0.27
@@ -112,29 +160,25 @@ class PlantarFasciitisAnalyzer:
             if research_score <= 0.23:
                 arch_type = "high"
                 pressure_dist = {"heel": 0.8, "arch": 0.1, "ball": 0.6, "toes": 0.4}
+                flexibility = 0.4
             elif research_score >= 0.27:
                 arch_type = "flat"
                 pressure_dist = {"heel": 0.6, "arch": 0.8, "ball": 0.6, "toes": 0.4}
+                flexibility = 0.4
             else:
                 arch_type = "normal"
                 pressure_dist = {"heel": 0.5, "arch": 0.4, "ball": 0.6, "toes": 0.6}
-            
-            # ---------------------------------------------------------
-            # Auto-Detect Side (Logic เดิม)
-            # ---------------------------------------------------------
-            M = cv2.moments(largest_contour)
-            cx = int(M["m10"] / M["m00"]) if M["m00"] != 0 else 0
-            detected_side = "left" if cx < (new_w // 2) else "right"
+                flexibility = 0.6
 
             return {
                 "arch_type": arch_type,
-                "detected_side": detected_side,
+                "detected_side": detected_side,  # ✅ ส่งค่าข้างเท้าที่วิเคราะห์ได้
                 "arch_height_ratio": float(research_score), # ใช้คะแนนวิจัยแทน Ratio เดิม
                 "heel_alignment": "neutral",
                 "foot_length_cm": 25.0,
                 "foot_width_cm": 10.0,
                 "pressure_points": pressure_dist,
-                "flexibility_score": 0.5,
+                "flexibility_score": flexibility,
                 "confidence": 0.90,
                 "method": "MBE_Perimeter_Regression"
             }
@@ -143,52 +187,104 @@ class PlantarFasciitisAnalyzer:
             logger.error(f"❌ Analysis failed: {e}")
             raise ValueError(f"เกิดข้อผิดพลาด: {str(e)}")
 
-    def assess_plantar_fasciitis(self, foot_analysis: Dict[str, Any], questionnaire_score: float = 0.0, bmi_score: int = 0) -> Dict[str, Any]:
-        # (ส่วนนี้คง Logic การรวมคะแนน Quiz+BMI ตามที่คุณต้องการล่าสุด)
-        logger.info(f"🏥 Assessing... (Quiz: {questionnaire_score}, BMI: {bmi_score})")
+    def _get_fallback_analysis(self):
+        return {
+            "arch_type": "normal",
+            "arch_height_ratio": 0.25,
+            "heel_alignment": "neutral",
+            "foot_length_cm": 25.0,
+            "foot_width_cm": 10.0,
+            "pressure_points": { "heel": 0.5, "arch": 0.5, "ball": 0.5, "toes": 0.5 },
+            "flexibility_score": 0.5
+        }  
+    
+    def assess_plantar_fasciitis(
+        self,
+        foot_analysis: Dict[str, Any],
+        questionnaire_score: float = 0.0,
+        bmi_score: int = 0
+    ) -> Dict[str, Any]:
+        """
+        ประเมินความรุนแรงของรองช้ำ (สูตรใหม่: Quiz + BMI)
+        """
+        logger.info(f"🏥 Assessing plantar fasciitis... (Quiz: {questionnaire_score}, BMI: {bmi_score})")
         
         arch_type = foot_analysis['arch_type']
+        pressure = foot_analysis['pressure_points']
+        flexibility = foot_analysis['flexibility_score']
         
-        # คำนวณคะแนนรวมตามสูตร (Quiz + BMI) / Max * 100
-        total_raw = questionnaire_score + bmi_score
-        max_score = 20.0
-        final_pf_score = min((total_raw / max_score) * 100.0, 100.0)
+        # --- 1. เก็บคะแนนส่วนสแกน (เพื่อแสดงผล แต่ไม่คิดรวมใน Severity หลัก) ---
+        indicators = {}
         
-        if final_pf_score < 40: sev, sev_th = "low", "ต่ำ"
-        elif final_pf_score < 70: sev, sev_th = "medium", "กลาง"
-        else: sev, sev_th = "high", "สูง"
+        # Mapping Score วิจัยให้เป็นสเกล 0-100 สำหรับ Frontend (แค่เพื่อการแสดงผล)
+        scan_score_raw = 50.0 # Normal
+        if arch_type == "flat": scan_score_raw = 80.0
+        elif arch_type == "high": scan_score_raw = 70.0
         
+        # --- 2. คำนวณความเสี่ยงรวม (Questionnaire + BMI) ---
+        # สมมติคะแนนเต็มรวมกันคือ 20 (Quiz ~17 + BMI 3)
+        total_score_raw = questionnaire_score + bmi_score
+        max_possible_score = 20.0 
+        
+        final_pf_score = (total_score_raw / max_possible_score) * 100.0
+        if final_pf_score > 100: final_pf_score = 100.0
+        
+        # --- 3. ตัดเกณฑ์ระดับความรุนแรง ---
+        if final_pf_score < 40: severity, severity_thai = "low", "ต่ำ"
+        elif final_pf_score < 70: severity, severity_thai = "medium", "กลาง"
+        else: severity, severity_thai = "high", "สูง"
+        
+        # --- 4. ปัจจัยเสี่ยง ---
         risk_factors = []
-        if bmi_score >= 2: risk_factors.append("น้ำหนักตัวเกินเกณฑ์")
+        if bmi_score == 3: risk_factors.append("น้ำหนักตัวเกินเกณฑ์ (Obesity)")
+        elif bmi_score == 2: risk_factors.append("เริ่มมีน้ำหนักเกิน (Overweight)")
+            
         if arch_type == "flat": risk_factors.append("เท้าแบน (Research Criteria)")
         if arch_type == "high": risk_factors.append("อุ้งเท้าสูง (Research Criteria)")
+        if flexibility < 0.5: risk_factors.append("ความยืดหยุ่นน้อย")
         
-        recommendations = self._generate_recommendations(sev, arch_type)
+        recommendations = self._generate_recommendations(severity, arch_type)
         
-        indicators = {
-            "scan_part_score": foot_analysis['arch_height_ratio'], # โชว์ค่า Score วิจัย
-            "questionnaire_part_score": questionnaire_score,
-            "bmi_score": float(bmi_score)
-        }
+        # บันทึกค่าต่างๆ ลง indicators
+        indicators['scan_part_score'] = round(scan_score_raw / 10.0, 1) # เต็ม 10
+        indicators['questionnaire_part_score'] = round(questionnaire_score, 1)
+        indicators['bmi_score'] = float(bmi_score)
+        
+        # ค่าอื่นๆ ที่ Frontend อาจเรียกใช้
+        indicators['arch_collapse_score'] = scan_score_raw
+        indicators['heel_pain_index'] = pressure['heel'] * 100
+        indicators['flexibility_score'] = (1 - flexibility) * 100
+        indicators['foot_alignment_score'] = 15.0 # default
         
         return {
-            "severity": sev,
-            "severity_thai": sev_th,
+            "severity": severity,
+            "severity_thai": severity_thai,
             "score": round(final_pf_score, 1),
             "arch_type": arch_type,
-            "indicators": indicators,
+            "indicators": {k: round(v, 1) for k, v in indicators.items()},
             "risk_factors": risk_factors,
             "recommendations": recommendations
         }
+    
+    def _calculate_std(self, values: List[float]) -> float:
+        n = len(values)
+        if n < 2: return 0
+        mean = sum(values) / n
+        variance = sum((x - mean) ** 2 for x in values) / n
+        return variance ** 0.5
+    
+    def _generate_recommendations(self, severity: str, arch_type: str) -> List[str]:
+        recommendations = []
+        if severity == "high":
+            recommendations.extend(["ควรพบแพทย์เฉพาะทางโดยเร็ว", "หลีกเลี่ยงการยืนนาน", "ใช้แผ่นรองเท้าพิเศษ (Orthotic insole)"])
+        if severity == "medium":
+            recommendations.extend(["ควรพักเท้าให้เพียงพอ", "ทำแบบฝึกหัดยืดเส้นเอ็นเท้า", "เลือกรองเท้าที่รองรับโค้งเท้าดี"])
+        if severity == "low":
+            recommendations.extend(["ทำแบบฝึกหัดเสริมกล้ามเนื้อเท้า", "เลือกรองเท้าที่เหมาะสมกับรูปเท้า"])
+        if arch_type == "flat": recommendations.append("เลือกรองเท้าที่มี arch support ระดับสูง")
+        elif arch_type == "high": recommendations.append("เลือกรองเท้าที่มี cushioning ดี")
+        return recommendations
 
-    def _generate_recommendations(self, severity, arch_type):
-        recs = ["ควรสวมรองเท้าที่เหมาะสม"]
-        if arch_type == "flat": recs.append("ใช้รองเท้าที่มี Arch Support")
-        if arch_type == "high": recs.append("ใช้รองเท้าที่รับแรงกระแทกได้ดี (Cushioning)")
-        if severity == "high": recs.append("ควรพบแพทย์เพื่อตรวจวินิจฉัยเพิ่มเติม")
-        return recs
-    
-    
 # import httpx
 # import asyncio
 # from typing import List, Dict, Any
