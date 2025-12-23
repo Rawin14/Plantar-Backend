@@ -54,6 +54,10 @@ CREATE TABLE pf_indicators (
   pressure_distribution_score DECIMAL(5,2),
   foot_alignment_score DECIMAL(5,2),
   flexibility_score DECIMAL(5,2),
+
+  scan_part_score DECIMAL(5,2),
+  questionnaire_part_score DECIMAL(5,2),
+  bmi_score DECIMAL(5,2),
   
   -- Details
   risk_factors TEXT[],
