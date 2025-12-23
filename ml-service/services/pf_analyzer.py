@@ -37,7 +37,6 @@ class PlantarFasciitisAnalyzer:
     def analyze_foot_structure(self, images: List[bytes]) -> Dict[str, Any]:
         """
         วิเคราะห์รอยเท้าด้วยวิธี Arch Index (Cavanagh & Rodgers)
-        คำนวณจากสัดส่วนพื้นที่: Area B / (Area A + B + C)
         """
         logger.info(f"🔍 Analyzing {len(images)} images (Arch Index Method)")
         
@@ -48,7 +47,7 @@ class PlantarFasciitisAnalyzer:
             nparr = np.frombuffer(images[0], np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
-            # Resize เพื่อความรวดเร็ว (แต่ไม่มีผลต่อ Ratio เพราะเป็นสัดส่วน)
+            # Resize
             target_height = 800
             h, w = img.shape[:2]
             scale = target_height / h
@@ -70,11 +69,17 @@ class PlantarFasciitisAnalyzer:
             if not contours: raise ValueError("ไม่พบรอยเท้า")
             largest_contour = max(contours, key=cv2.contourArea)
             
-            # Sanity Check
+            # Sanity Check (แก้ไขจุดนี้)
             contour_area = cv2.contourArea(largest_contour)
             img_area = img.shape[0] * img.shape[1]
-            if contour_area < 2000: raise ValueError("รอยเท้าเล็กเกินไป")
-            if (contour_area / img_area) > 0.90: raise ValueError("วัตถุเต็มหน้าจอเกินไป")
+            
+            # ❌ ลบหรือแก้บรรทัดนี้: if (contour_area / img_area) > 0.90: ...
+            # ✅ แก้เป็น 0.99 (99%) เพื่ออนุญาตให้รอยเท้าเกือบเต็มจอได้
+            if (contour_area / img_area) > 0.99: 
+                raise ValueError("วัตถุเต็มหน้าจอเกินไป (อาจเป็นภาพพื้นหลังดำล้วน)")
+                
+            if contour_area < 2000: 
+                raise ValueError("รอยเท้าเล็กเกินไป")
 
             # ---------------------------------------------------------
             # 🤖 Feature: Auto-Detect Foot Side (Left/Right)
@@ -90,54 +95,51 @@ class PlantarFasciitisAnalyzer:
             # ---------------------------------------------------------
             x, y, w, h = cv2.boundingRect(largest_contour)
             
-            # สร้าง Mask เฉพาะรอยเท้า
+            # สร้าง Mask
             foot_mask = np.zeros_like(thresh)
             cv2.drawContours(foot_mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
             
-            # ตัดส่วนรอยเท้าออกมา (Crop)
+            # Crop
             foot_roi = foot_mask[y:y+h, x:x+w]
             
-            # 1. ตัดนิ้วเท้าออก (20% บนสุดของความยาวเท้า)
+            # 1. ตัดนิ้วเท้า (20%)
             foot_len = h
             toes_len = int(foot_len * 0.20)
             sole_len = foot_len - toes_len
             
-            # 2. แบ่งส่วนที่เหลือเป็น 3 ส่วนเท่ากัน (Forefoot, Arch, Heel)
+            # 2. แบ่ง 3 ส่วน
             section_h = sole_len // 3
-            start_y = toes_len # เริ่มนับหลังนิ้วเท้า
+            start_y = toes_len
             
-            # ตัดพื้นที่แต่ละส่วน
-            # Region C (Forefoot/จมูกเท้า)
-            region_c = foot_roi[start_y : start_y + section_h, :]
-            # Region B (Arch/อุ้งเท้า) -> **ส่วนสำคัญที่สุด**
+            # Region B (Arch)
             region_b = foot_roi[start_y + section_h : start_y + (2 * section_h), :]
-            # Region A (Heel/ส้นเท้า)
+            
+            # Region A (Heel)
             region_a = foot_roi[start_y + (2 * section_h) : , :]
             
-            # 3. คำนวณพื้นที่ (นับจำนวนพิกเซลสีขาว)
+            # Region C (Forefoot) - ไม่ได้ใช้ในสูตรแต่ตัดไว้ครบองค์ประกอบ
+            region_c = foot_roi[start_y : start_y + section_h, :]
+            
+            # 3. คำนวณพื้นที่
             area_a = cv2.countNonZero(region_a)
             area_b = cv2.countNonZero(region_b)
-            area_c = cv2.countNonZero(region_c)
-            total_area = area_a + area_b + area_c
+            # area_c = cv2.countNonZero(region_c) # ไม่ต้องใช้ก็ได้
+            total_area_ABC = cv2.countNonZero(foot_roi[start_y:, :]) # พื้นที่ทั้งหมด (ไม่รวมนิ้ว)
             
-            if total_area == 0: raise ValueError("ไม่สามารถคำนวณพื้นที่ได้")
+            if total_area_ABC == 0: raise ValueError("ไม่สามารถคำนวณพื้นที่ได้")
             
-            # 4. สูตร Arch Index (AI) = Area B / Total
-            arch_index = area_b / total_area
-            logger.info(f"📊 Arch Index: {arch_index:.4f} (Region B Ratio)")
+            # 4. สูตร Arch Index (AI) = Area B / Total (A+B+C)
+            arch_index = area_b / total_area_ABC
+            logger.info(f"📊 Arch Index: {arch_index:.4f}")
 
             # ---------------------------------------------------------
-            # 5. Classification (เกณฑ์มาตรฐาน Cavanagh & Rodgers)
+            # 5. Classification
             # ---------------------------------------------------------
-            # High Arch: <= 0.21
-            # Normal: 0.21 - 0.26
-            # Flat: >= 0.26
-            
             if arch_index <= 0.21:
                 arch_type = "high"
                 pressure_dist = {"heel": 0.8, "arch": 0.1, "ball": 0.6, "toes": 0.4}
                 flexibility = 0.4
-            elif arch_index >= 0.26: # ปรับเป็น 0.26 ตามมาตรฐานงานวิจัย (เดิม 0.28)
+            elif arch_index >= 0.26:
                 arch_type = "flat"
                 pressure_dist = {"heel": 0.6, "arch": 0.8, "ball": 0.6, "toes": 0.4}
                 flexibility = 0.4
@@ -164,17 +166,14 @@ class PlantarFasciitisAnalyzer:
             raise ValueError(f"เกิดข้อผิดพลาด: {str(e)}")
 
     def assess_plantar_fasciitis(self, foot_analysis, questionnaire_score=0.0, bmi_score=0):
-        # (ส่วนนี้เหมือนเดิม: คำนวณ Severity จาก Quiz + BMI)
+        # (ส่วนนี้คงเดิม ไม่มีการเปลี่ยนแปลง)
         logger.info(f"🏥 Assessing... (Quiz: {questionnaire_score}, BMI: {bmi_score})")
         arch_type = foot_analysis['arch_type']
         
-        # Mapping Score เพื่อแสดงผลกราฟ (Frontend)
-        # แปลง Arch Index กลับเป็นคะแนน 0-100 คร่าวๆ เพื่อความสวยงาม
         scan_score_display = 50.0
         if arch_type == 'flat': scan_score_display = 80.0
         elif arch_type == 'high': scan_score_display = 70.0
         
-        # คำนวณ Severity หลัก (Quiz + BMI)
         total = questionnaire_score + bmi_score
         final_score = min((total / 20.0) * 100.0, 100.0)
         
@@ -187,9 +186,8 @@ class PlantarFasciitisAnalyzer:
         if arch_type == 'flat': risk_factors.append("เท้าแบน (Flat Arch)")
         if arch_type == 'high': risk_factors.append("อุ้งเท้าสูง (High Arch)")
         
-        # เตรียม Indicators ให้ครบตาม Database
         indicators = {
-            "scan_part_score": foot_analysis['arch_height_ratio'], # เก็บค่า AI จริง (เช่น 0.24)
+            "scan_part_score": foot_analysis['arch_height_ratio'],
             "questionnaire_part_score": questionnaire_score,
             "bmi_score": float(bmi_score),
             "arch_collapse_score": scan_score_display,
@@ -212,7 +210,6 @@ class PlantarFasciitisAnalyzer:
         elif arch_type == "high": recs.append("ใช้รองเท้าที่รับแรงกระแทกได้ดี (Cushioning)")
         if severity == "high": recs.append("ควรพบแพทย์เพื่อตรวจวินิจฉัยเพิ่มเติม")
         return recs
-    
 # import httpx
 # import asyncio
 # from typing import List, Dict, Any
