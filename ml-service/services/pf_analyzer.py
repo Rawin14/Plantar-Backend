@@ -1,7 +1,7 @@
 """
-Plantar Fasciitis Analyzer (Standard Arch Index + Shape Validation)
-Method: Cavanagh & Rodgers Arch Index (Area Ratio)
-Validation: Aspect Ratio & Extent Check
+Plantar Fasciitis Analyzer (Enhanced Precision)
+Method: Cavanagh & Rodgers Arch Index
+Improvement: Adaptive Thresholding + Morphological Operations
 """
 
 import httpx
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class PlantarFasciitisAnalyzer:
     def __init__(self):
         self.timeout = httpx.Timeout(30.0)
-        logger.info("🔧 Initializing PF Analyzer (Smart Validation Mode)")
+        logger.info("🔧 Initializing PF Analyzer (High Precision Mode)")
     
     async def download_images(self, urls: List[str]) -> List[bytes]:
         images = []
@@ -36,9 +36,9 @@ class PlantarFasciitisAnalyzer:
 
     def analyze_foot_structure(self, images: List[bytes]) -> Dict[str, Any]:
         """
-        วิเคราะห์รอยเท้า พร้อมระบบคัดกรองวัตถุแปลกปลอม (Smart Validation)
+        วิเคราะห์รอยเท้าด้วยความแม่นยำสูง (Adaptive Threshold + Morphology)
         """
-        logger.info(f"🔍 Analyzing {len(images)} images...")
+        logger.info(f"🔍 Analyzing {len(images)} images (Enhanced)...")
         
         if not images: raise ValueError("ไม่พบรูปภาพ")
 
@@ -47,114 +47,102 @@ class PlantarFasciitisAnalyzer:
             nparr = np.frombuffer(images[0], np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
-            # Resize
+            # Resize (Standardization)
             target_height = 800
             h, w = img.shape[:2]
             scale = target_height / h
             new_w = int(w * scale)
             img = cv2.resize(img, (new_w, target_height))
 
-            # 2. Pre-processing
+            # ---------------------------------------------------------
+            # 2. Advanced Pre-processing (หัวใจสำคัญของความแม่นยำ)
+            # ---------------------------------------------------------
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             
-            # Check Brightness
-            if np.mean(gray) < 40: raise ValueError("รูปภาพมืดเกินไป")
+            # เพิ่ม Contrast (CLAHE) เพื่อให้เห็นรอยจางๆ ชัดขึ้น
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced_gray = clahe.apply(gray)
             
-            # Thresholding
-            blur = cv2.GaussianBlur(gray, (5, 5), 0)
-            _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            # Gaussian Blur ลด Noise
+            blur = cv2.GaussianBlur(enhanced_gray, (7, 7), 0)
             
-            # Find Contour
+            # ✅ ใช้ Adaptive Threshold แทน Otsu (จับรอยจางได้ดีกว่า)
+            thresh = cv2.adaptiveThreshold(
+                blur, 255, 
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                cv2.THRESH_BINARY_INV, 
+                19, 4 # Block Size, C (ต้องจูนให้พอดี)
+            )
+            
+            # ✅ Morphological Operations (ซ่อมแซมรอยเท้า)
+            kernel = np.ones((5,5), np.uint8)
+            
+            # Closing: ถมรูรั่วหรือรอยขาดในเนื้อเท้า (แก้ปัญหาเท้าแบนแต่น้ำจางจนกลายเป็นเท้าสูง)
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
+            
+            # Opening: ลบจุดรบกวนเล็กๆ รอบนอก (Noise)
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+            
+            # ---------------------------------------------------------
+            # 3. Validation & Contour
+            # ---------------------------------------------------------
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours: raise ValueError("ไม่พบรอยเท้า")
             largest_contour = max(contours, key=cv2.contourArea)
             
-            # ---------------------------------------------------------
-            # 🛡️ Smart Validation: ตรวจสอบว่าเป็นรอยเท้าจริงหรือไม่
-            # ---------------------------------------------------------
-            
-            # 1. ขนาดวัตถุ (Area)
             contour_area = cv2.contourArea(largest_contour)
             img_area = img.shape[0] * img.shape[1]
-            if contour_area < 2000: 
-                raise ValueError("วัตถุมีขนาดเล็กเกินไป ไม่ใช่รอยเท้า")
-            if (contour_area / img_area) > 0.99: 
-                raise ValueError("วัตถุเต็มหน้าจอเกินไป (อาจเป็นพื้นหลัง)")
-
-            # คำนวณกรอบสี่เหลี่ยมรอบวัตถุ
-            x, y, w, h = cv2.boundingRect(largest_contour)
             
-            # 2. สัดส่วน (Aspect Ratio)
-            # รอยเท้าต้องเป็นทรงยาวแนวตั้ง (สูง > กว้าง)
-            # ปกติอัตราส่วนจะอยู่ที่ประมาณ 2.0 ถึง 3.5
+            # Validation Rule
+            if contour_area < 2000: raise ValueError("วัตถุขนาดเล็กเกินไป")
+            if (contour_area / img_area) > 0.99: raise ValueError("วัตถุเต็มหน้าจอเกินไป")
+            
+            x, y, w, h = cv2.boundingRect(largest_contour)
             aspect_ratio = float(h) / w if w > 0 else 0
             
-            if aspect_ratio < 1.0:
-                 raise ValueError("กรุณาถ่ายรูปในแนวตั้ง (Vertical) หรือหมุนรูปภาพ")
+            if aspect_ratio < 1.0: raise ValueError("กรุณาถ่ายรูปแนวตั้ง")
+            if aspect_ratio < 1.3: raise ValueError("วัตถุดูกว้างผิดปกติ")
+            if aspect_ratio > 5.5: raise ValueError("วัตถุผอมยาวผิดปกติ")
             
-            if aspect_ratio < 1.3:
-                raise ValueError(f"วัตถุดูกว้างเกินไป (Ratio {aspect_ratio:.1f}) ไม่เหมือนรอยเท้า")
-                
-            if aspect_ratio > 5.0:
-                raise ValueError(f"วัตถุผอมยาวเกินไป (Ratio {aspect_ratio:.1f}) ไม่เหมือนรอยเท้า")
-
-            # 3. ความตัน (Extent)
-            # Extent = พื้นที่วัตถุ / พื้นที่กรอบสี่เหลี่ยม
-            # รอยเท้าจะมีส่วนเว้า (อุ้งเท้า/นิ้ว) ทำให้ไม่เต็มกรอบสี่เหลี่ยม (ค่าประมาณ 0.5 - 0.75)
-            # ถ้าเป็นกล่อง/สมุด/โทรศัพท์ ค่าจะเกือบ 1.0
             rect_area = w * h
             extent = contour_area / rect_area
-            
-            if extent > 0.85:
-                raise ValueError("วัตถุมีรูปทรงสี่เหลี่ยมตันเกินไป ไม่ใช่รอยเท้า")
+            if extent > 0.85: raise ValueError("วัตถุทรงสี่เหลี่ยมตันเกินไป")
 
             # ---------------------------------------------------------
             # 🤖 Auto-Detect Side
             # ---------------------------------------------------------
             M = cv2.moments(largest_contour)
             cx = int(M["m10"] / M["m00"]) if M["m00"] != 0 else 0
-            center_line = img.shape[1] // 2
-            detected_side = "left" if cx < center_line else "right"
-            logger.info(f"🦶 Valid Foot Detected! Side: {detected_side}, Ratio: {aspect_ratio:.2f}")
+            detected_side = "left" if cx < (img.shape[1] // 2) else "right"
+            logger.info(f"🦶 Side: {detected_side}, Ratio: {aspect_ratio:.2f}")
 
             # ---------------------------------------------------------
-            # 📐 Standard Method: Arch Index
+            # 📐 Arch Index Calculation
             # ---------------------------------------------------------
-            
-            # สร้าง Mask
+            # สร้าง Mask ใหม่ที่สะอาดที่สุด
             foot_mask = np.zeros_like(thresh)
             cv2.drawContours(foot_mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
-            
-            # Crop
             foot_roi = foot_mask[y:y+h, x:x+w]
             
-            # 1. ตัดนิ้วเท้า (20%)
+            # แบ่งส่วน 3 ส่วน (ตัดนิ้ว 20%)
             foot_len = h
-            toes_len = int(foot_len * 0.20)
+            toes_len = int(foot_len * 0.20) 
             sole_len = foot_len - toes_len
-            
-            # 2. แบ่ง 3 ส่วน
             section_h = sole_len // 3
             start_y = toes_len
             
-            # Region B (Arch)
             region_b = foot_roi[start_y + section_h : start_y + (2 * section_h), :]
-            
-            # Region A (Heel)
             region_a = foot_roi[start_y + (2 * section_h) : , :]
             
-            # 3. คำนวณพื้นที่
-            area_a = cv2.countNonZero(region_a)
             area_b = cv2.countNonZero(region_b)
-            total_area_ABC = cv2.countNonZero(foot_roi[start_y:, :]) 
+            total_area_ABC = cv2.countNonZero(foot_roi[start_y:, :])
             
             if total_area_ABC == 0: raise ValueError("Error calculating area")
             
-            # 4. Arch Index
             arch_index = area_b / total_area_ABC
             logger.info(f"📊 Arch Index: {arch_index:.4f}")
 
-            # 5. Classification
+            # Classification
             if arch_index <= 0.21:
                 arch_type = "high"
                 pressure_dist = {"heel": 0.8, "arch": 0.1, "ball": 0.6, "toes": 0.4}
@@ -178,7 +166,7 @@ class PlantarFasciitisAnalyzer:
                 "pressure_points": pressure_dist,
                 "flexibility_score": flexibility,
                 "confidence": 0.95,
-                "method": "Standard_Arch_Index"
+                "method": "Enhanced_Arch_Index"
             }
 
         except Exception as e:
@@ -230,7 +218,7 @@ class PlantarFasciitisAnalyzer:
         elif arch_type == "high": recs.append("ใช้รองเท้าที่รับแรงกระแทกได้ดี (Cushioning)")
         if severity == "high": recs.append("ควรพบแพทย์เพื่อตรวจวินิจฉัยเพิ่มเติม")
         return recs
-    
+      
 # import httpx
 # import asyncio
 # from typing import List, Dict, Any
