@@ -136,7 +136,8 @@ class SupabaseStorage:
                 "risk_factors": indicators.get('risk_factors', []),
                 "recommendations": indicators.get('recommendations', []),
                 "scan_part_score": indicators.get('scan_part_score'),
-                "questionnaire_part_score": indicators.get('questionnaire_part_score')
+                "questionnaire_part_score": indicators.get('questionnaire_part_score'),
+                "bmi_score": indicators.get('bmi_score')
             }
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
