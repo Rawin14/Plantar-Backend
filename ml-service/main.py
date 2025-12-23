@@ -225,6 +225,9 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
     )
         logger.info(f"✅ PF Score: {pf_assessment['score']}, Severity: {pf_assessment['severity']}")
 
+        detected_side = foot_analysis.get("detected_side", "unknown")
+        logger.info(f"✅ Analysis: arch={foot_analysis['arch_type']}, side={detected_side}")
+
         real_model_url = None
         
         # ใช้ processor.generate_3d_model แทน analyzer.generate_3d_model
@@ -237,6 +240,7 @@ async def process_pf_assessment(scan_id: str, image_urls: List[str], questionnai
         # 4. Update scan with results
         await storage.update_scan(
             scan_id=scan_id,
+            foot_side=detected_side,
             pf_severity=pf_assessment['severity'],
             pf_score=pf_assessment['score'],
             arch_type=pf_assessment['arch_type'],

@@ -47,6 +47,7 @@ class PlantarFasciitisAnalyzer:
     def analyze_foot_structure(self, images: List[bytes]) -> Dict[str, Any]:
         """
         วิเคราะห์รอยเท้าเปียก (Wet Test) โดยใช้ Image Processing (OpenCV)
+        พร้อมระบบระบุข้างเท้าอัตโนมัติ (Auto-Detect Side)
         """
         logger.info(f"🔍 Analyzing {len(images)} footprint images (Wet Test)")
         
@@ -64,32 +65,25 @@ class PlantarFasciitisAnalyzer:
             # ---------------------------------------------------------
             # 🛡️ 1. เพิ่มการตรวจสอบคุณภาพรูปภาพ (Validation)
             # ---------------------------------------------------------
-            
-            # 1.1 เช็คความสว่าง (Brightness Check)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             mean_brightness = np.mean(gray)
             logger.info(f"💡 Image Brightness: {mean_brightness:.2f}")
             
-            if mean_brightness < 40: # ถ้าค่าต่ำกว่า 40 แสดงว่ามืดมาก
+            if mean_brightness < 40:
                 raise ValueError("รูปภาพมืดเกินไป กรุณาถ่ายในที่มีแสงสว่างเพียงพอ")
-            if mean_brightness > 250: # ถ้าขาวโพลนไปหมด
+            if mean_brightness > 250:
                 raise ValueError("รูปภาพสว่างเกินไปจนไม่เห็นรายละเอียด")
 
-            # 1.2 เช็คความเปรียบต่าง (Contrast Check)
             contrast = gray.std()
             logger.info(f"🌗 Image Contrast: {contrast:.2f}")
             
-            if contrast < 10: # ถ้าค่าเบี่ยงเบนมาตรฐานต่ำ แสดงว่าสีกลืนกันหมด (เช่น จอดำสนิท หรือกระดาษเปล่า)
+            if contrast < 10:
                 raise ValueError("ไม่พบความแตกต่างในภาพ (ภาพกลืนกันหมด) กรุณาถ่ายให้เห็นรอยเท้าตัดกับกระดาษชัดเจน")
 
             # ---------------------------------------------------------
             # 2. Pre-processing
             # ---------------------------------------------------------
-            # Blur เพื่อลด Noise
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
-            
-            # ใช้ Otsu's Thresholding
-            # (รอยเท้าเปียกจะเข้มกว่ากระดาษ -> THRESH_BINARY_INV)
             _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             
             # 3. หา Contour
@@ -98,56 +92,55 @@ class PlantarFasciitisAnalyzer:
             if not contours:
                 raise ValueError("ไม่พบรอยเท้าในภาพ")
                 
-            # หา Contour ที่ใหญ่ที่สุด
             largest_contour = max(contours, key=cv2.contourArea)
             contour_area = cv2.contourArea(largest_contour)
-            
-            # ---------------------------------------------------------
-            # 🛡️ 2. ตรวจสอบความสมเหตุสมผลของรอยเท้า (Sanity Check)
-            # ---------------------------------------------------------
             
             img_area = img.shape[0] * img.shape[1]
             fill_ratio = contour_area / img_area
             
-            logger.info(f"📐 Contour Area: {contour_area}, Fill Ratio: {fill_ratio:.2f}")
-
-            # 2.1 รอยเท้าเล็กเกินไป (Noise)
             if contour_area < 2000: 
                 raise ValueError("รอยเท้าเล็กเกินไป หรือไม่ชัดเจน")
-                
-            # 2.2 รอยเท้าใหญ่เต็มจอ (เช่น ถ่ายรูปดำ หรือถ่ายวัตถุระยะประชิดเกินไป)
             if fill_ratio > 0.90:
-                raise ValueError("วัตถุเต็มหน้าจอเกินไป (อาจไม่ใช่รอยเท้า) กรุณาถอยกล้องออกมาให้เห็นขอบกระดาษ")
+                raise ValueError("วัตถุเต็มหน้าจอเกินไป (อาจไม่ใช่รอยเท้า)")
+
+            # ---------------------------------------------------------
+            # 🤖 New Feature: Auto-Detect Foot Side (Left/Right)
+            # ---------------------------------------------------------
+            # ใช้หลักการ Center of Mass (จุดศูนย์ถ่วง)
+            M = cv2.moments(largest_contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"]) # พิกัดแกน X ของจุดศูนย์ถ่วง
+            else:
+                cx = 0
+            
+            img_width = img.shape[1]
+            center_line = img_width // 2
+            
+            # ถ้าจุดศูนย์ถ่วงอยู่ทางซ้ายของภาพ = เท้าซ้าย (โดยธรรมชาติรอยเท้า)
+            # ถ้าจุดศูนย์ถ่วงอยู่ทางขวาของภาพ = เท้าขวา
+            detected_side = "left" if cx < center_line else "right"
+            logger.info(f"🦶 Auto-detected Side: {detected_side.upper()} (Centroid X: {cx}, Image Center: {center_line})")
 
             # ---------------------------------------------------------
             # 4. คำนวณ Arch Index (AI)
             # ---------------------------------------------------------
-            
             x, y, w, h = cv2.boundingRect(largest_contour)
             
-            # สร้าง Mask เฉพาะรอยเท้า
             footprint_mask = np.zeros_like(thresh)
             cv2.drawContours(footprint_mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
-            
-            # Crop
             cropped_foot = footprint_mask[y:y+h, x:x+w]
             
-            # ตัดส่วนนิ้วเท้าออก 20%
             foot_length = h
             toes_length = int(foot_length * 0.20)
             
             sole_start_y = toes_length
             sole_length = foot_length - toes_length
-            
-            # แบ่ง 3 ส่วน
             section_height = sole_length // 3
             
-            # ตัด Mask
-            region_c = cropped_foot[sole_start_y : sole_start_y + section_height, :] # Forefoot
-            region_b = cropped_foot[sole_start_y + section_height : sole_start_y + (2 * section_height), :] # Midfoot (Arch)
-            region_a = cropped_foot[sole_start_y + (2 * section_height) : , :] # Hindfoot
+            region_c = cropped_foot[sole_start_y : sole_start_y + section_height, :]
+            region_b = cropped_foot[sole_start_y + section_height : sole_start_y + (2 * section_height), :]
+            region_a = cropped_foot[sole_start_y + (2 * section_height) : , :]
             
-            # นับพื้นที่
             area_a = cv2.countNonZero(region_a)
             area_b = cv2.countNonZero(region_b)
             area_c = cv2.countNonZero(region_c)
@@ -157,34 +150,31 @@ class PlantarFasciitisAnalyzer:
             if total_area == 0:
                 raise ValueError("ไม่สามารถคำนวณพื้นที่รอยเท้าได้")
             
-            # สูตร Arch Index
             arch_index = area_b / total_area
             logger.info(f"📐 Arch Index Calculated: {arch_index:.4f}")
             
             # 5. แปลผล
             if arch_index < 0.21:
-                arch_type = "high"
-                heel_pressure = 0.8; arch_pressure = 0.1; flexibility = 0.4
+                arch_type, heel_p, flex = "high", 0.8, 0.4
             elif arch_index > 0.28:
-                arch_type = "flat"
-                heel_pressure = 0.6; arch_pressure = 0.8; flexibility = 0.4
+                arch_type, heel_p, flex = "flat", 0.6, 0.4
             else:
-                arch_type = "normal"
-                heel_pressure = 0.5; arch_pressure = 0.4; flexibility = 0.6
+                arch_type, heel_p, flex = "normal", 0.5, 0.6
 
             return {
                 "arch_type": arch_type,
+                "detected_side": detected_side, # ✅ ส่งค่าที่วิเคราะห์ได้กลับไป
                 "arch_height_ratio": float(arch_index),
                 "heel_alignment": "neutral",
                 "foot_length_cm": 25.0,
                 "foot_width_cm": 10.0,
                 "pressure_points": {
-                    "heel": heel_pressure,
-                    "arch": arch_pressure,
+                    "heel": heel_p,
+                    "arch": 0.5,
                     "ball": 0.6,
                     "toes": 0.4
                 },
-                "flexibility_score": flexibility,
+                "flexibility_score": flex,
                 "confidence": 0.95
             }
 
@@ -207,13 +197,10 @@ class PlantarFasciitisAnalyzer:
         self,
         foot_analysis: Dict[str, Any],
         questionnaire_score: float = 0.0,
-        bmi_score: int = 0  # ✅ 1. เพิ่มตัวรับค่า BMI
+        bmi_score: int = 0
     ) -> Dict[str, Any]:
         """
         ประเมินความรุนแรงของรองช้ำ (สูตรใหม่: Quiz + BMI)
-        - Questionnaire (Max ~17)
-        - BMI Score (Max 3)
-        - Scan Result (ใช้ดูปัจจัยเสี่ยง แต่ไม่นำมาคิดคะแนนรวม)
         """
         logger.info(f"🏥 Assessing plantar fasciitis... (Quiz: {questionnaire_score}, BMI: {bmi_score})")
         
@@ -221,7 +208,6 @@ class PlantarFasciitisAnalyzer:
         pressure = foot_analysis['pressure_points']
         flexibility = foot_analysis['flexibility_score']
         
-        # --- 1. คำนวณคะแนนส่วนสแกน (เก็บไว้เป็นข้อมูล แต่ไม่เอาไปคิดรวมใน Severity) ---
         indicators = {}
         
         if arch_type == "flat": indicators['arch_collapse_score'] = 75.0
@@ -237,7 +223,6 @@ class PlantarFasciitisAnalyzer:
         indicators['foot_alignment_score'] = 15.0 if foot_analysis['heel_alignment'] == "neutral" else 60.0
         indicators['flexibility_score'] = (1 - flexibility) * 100
         
-        # คำนวณคะแนนดิบของ Scan (เผื่อไว้โชว์กราฟแยก)
         weights = {
             'arch_collapse_score': 0.30,
             'heel_pain_index': 0.25,
@@ -246,49 +231,29 @@ class PlantarFasciitisAnalyzer:
             'flexibility_score': 0.10
         }
         scan_score_raw = sum(indicators[key] * weight for key, weight in weights.items())
-        scan_score_10 = scan_score_raw / 10.0 # แปลงเป็นเต็ม 10
-        
-        # --- 2. คำนวณคะแนนความเสี่ยงรวม (สูตรใหม่) ---
-        # Total = Questionnaire + BMI
-        # สมมติคะแนนเต็มรวมกันคือ 20 (Quiz ~17 + BMI 3)
+        scan_score_10 = scan_score_raw / 10.0
         
         total_score_raw = questionnaire_score + bmi_score
         max_possible_score = 20.0 
         
-        # แปลงเป็น % (0-100) เพื่อเก็บลง DB และคำนวณ Severity
         final_pf_score = (total_score_raw / max_possible_score) * 100.0
-        
-        # กันค่าเกิน 100%
         if final_pf_score > 100: final_pf_score = 100.0
         
-        # --- 3. ตัดเกณฑ์ระดับความรุนแรง ---
-        if final_pf_score < 40:
-            severity = "low"
-            severity_thai = "ต่ำ"
-        elif final_pf_score < 70:
-            severity = "medium"
-            severity_thai = "กลาง"
-        else:
-            severity = "high"
-            severity_thai = "สูง"
+        if final_pf_score < 40: severity, severity_thai = "low", "ต่ำ"
+        elif final_pf_score < 70: severity, severity_thai = "medium", "กลาง"
+        else: severity, severity_thai = "high", "สูง"
         
-        # --- 4. สร้างรายการปัจจัยเสี่ยง ---
         risk_factors = []
-        
-        # ✅ เพิ่มปัจจัยเสี่ยงจาก BMI
         if bmi_score == 3: risk_factors.append("น้ำหนักตัวเกินเกณฑ์ (Obesity)")
         elif bmi_score == 2: risk_factors.append("เริ่มมีน้ำหนักเกิน (Overweight)")
             
-        # ปัจจัยจากรูปเท้า
         if arch_type == "flat": risk_factors.append("เท้าแบน (Flat feet)")
         if arch_type == "high": risk_factors.append("โค้งเท้าสูง (High arch)")
         if pressure['heel'] > 0.7: risk_factors.append("แรงกดส้นเท้าสูง")
         if flexibility < 0.5: risk_factors.append("ความยืดหยุ่นน้อย")
         
-        # --- 5. สร้างคำแนะนำ ---
         recommendations = self._generate_recommendations(severity, arch_type)
         
-        # ✅ บันทึกคะแนนย่อยลง Indicators
         indicators['scan_part_score'] = round(scan_score_10, 1)
         indicators['questionnaire_part_score'] = round(questionnaire_score, 1)
         indicators['bmi_score'] = float(bmi_score)
@@ -296,13 +261,31 @@ class PlantarFasciitisAnalyzer:
         return {
             "severity": severity,
             "severity_thai": severity_thai,
-            "score": round(final_pf_score, 1), # คะแนนรวม %
+            "score": round(final_pf_score, 1),
             "arch_type": arch_type,
             "indicators": {k: round(v, 1) for k, v in indicators.items()},
             "risk_factors": risk_factors,
             "recommendations": recommendations
         }
     
+    def _calculate_std(self, values: List[float]) -> float:
+        n = len(values)
+        if n < 2: return 0
+        mean = sum(values) / n
+        variance = sum((x - mean) ** 2 for x in values) / n
+        return variance ** 0.5
+    
+    def _generate_recommendations(self, severity: str, arch_type: str) -> List[str]:
+        recommendations = []
+        if severity == "high":
+            recommendations.extend(["ควรพบแพทย์เฉพาะทางโดยเร็ว", "หลีกเลี่ยงการยืนนาน", "ใช้แผ่นรองเท้าพิเศษ (Orthotic insole)"])
+        if severity == "medium":
+            recommendations.extend(["ควรพักเท้าให้เพียงพอ", "ทำแบบฝึกหัดยืดเส้นเอ็นเท้า", "เลือกรองเท้าที่รองรับโค้งเท้าดี"])
+        if severity == "low":
+            recommendations.extend(["ทำแบบฝึกหัดเสริมกล้ามเนื้อเท้า", "เลือกรองเท้าที่เหมาะสมกับรูปเท้า"])
+        if arch_type == "flat": recommendations.append("เลือกรองเท้าที่มี arch support ระดับสูง")
+        elif arch_type == "high": recommendations.append("เลือกรองเท้าที่มี cushioning ดี")
+        return recommendations
 # import httpx
 # import asyncio
 # from typing import List, Dict, Any
