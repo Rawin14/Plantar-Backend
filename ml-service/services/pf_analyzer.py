@@ -35,7 +35,7 @@ class PlantarFasciitisAnalyzer:
         except: return None
 
     def _calculate_curvature(self, contour):
-        """คำนวณค่าความโค้ง (Curvature) ของเส้นรอบรูป"""
+        """คำนวณค่าความโค้ง (Curvature) ของเส้นรอบรูป [cite: 776]"""
         # contour shape: (N, 1, 2)
         pts = contour.squeeze().astype(float)
         x = pts[:, 0]
@@ -86,16 +86,16 @@ class PlantarFasciitisAnalyzer:
             # 🔬 Research Method Calculation (MBE + P)
             # ---------------------------------------------------------
             
-            # 1. Perimeter (P): PDF ระบุว่า P = จำนวน pixel ขอบ * (pi/4)
+            # 1. Perimeter (P): PDF ระบุว่า P = จำนวน pixel ขอบ * (pi/4) [cite: 757]
             # ใช้ len(contour) เพื่อนับจำนวนจุดขอบ
             num_boundary_pixels = len(largest_contour)
             P = num_boundary_pixels * (np.pi / 4)
             
-            # 2. Mean Bending Energy (MBE): ค่าเฉลี่ยของ curvature^2
+            # 2. Mean Bending Energy (MBE): ค่าเฉลี่ยของ curvature^2 [cite: 807]
             curvature = self._calculate_curvature(largest_contour)
             MBE = np.mean(curvature ** 2)
             
-            # 3. Apply Equation (6) จาก PDF
+            # 3. Apply Equation (6) จาก PDF 
             # AHI = (-7.351e-5 * P) - (1050.964 * MBE) + 0.4597
             # สังเกต: PDF ใช้ค่า P เป็นลบ และ MBE เป็นลบ เพื่อให้ค่าต่ำ = High Arch
             research_score = (-7.351e-5 * P) - (1050.964 * MBE) + 0.4597
@@ -103,7 +103,7 @@ class PlantarFasciitisAnalyzer:
             logger.info(f"📊 Research Score: {research_score:.4f} (P={P:.1f}, MBE={MBE:.6f})")
 
             # ---------------------------------------------------------
-            # 4. Classification (New Cut-offs from Figure 6)
+            # 4. Classification (New Cut-offs from Figure 6) 
             # ---------------------------------------------------------
             # High Arch: <= 0.23
             # Normal: 0.23 - 0.27
@@ -187,6 +187,7 @@ class PlantarFasciitisAnalyzer:
         if arch_type == "high": recs.append("ใช้รองเท้าที่รับแรงกระแทกได้ดี (Cushioning)")
         if severity == "high": recs.append("ควรพบแพทย์เพื่อตรวจวินิจฉัยเพิ่มเติม")
         return recs
+    
     
 # import httpx
 # import asyncio
