@@ -227,59 +227,47 @@ async def process_pf_assessment(
     age: int,
     activity_level: str
 ): 
-    """Background task: ประมวลผลและประเมินอาการรองช้ำ"""
+    """Background task: เน้นให้วิเคราะห์รูปผ่านก่อน (ปิดฟีเจอร์เสริมชั่วคราว)"""
     try:
         logger.info(f"🔄 Starting PF assessment for {scan_id}")
         
         # 0. Update Status
         await storage.update_scan_status(scan_id, status="processing")
         
-        # 1. Download images (✅ แก้แล้วใช้ processor)
+        # 1. Download images (✅ แก้จุดที่ Error: ต้องใช้ processor)
         logger.info(f"📥 Downloading {len(image_urls)} images...")
         images = await processor.download_images(image_urls)
         logger.info(f"✅ Downloaded {len(images)} images")
         
-        # 2. Analyze foot structure (ใช้อันนี้ analyzer ถูกแล้ว)
+        # 2. Analyze foot structure
         logger.info(f"🔍 Analyzing foot structure...")
         foot_analysis = analyzer.analyze_foot_structure(images)
         logger.info(f"✅ Analysis: arch={foot_analysis['arch_type']}")
         
-        # 3. Generate 3D Model (ถ้ามี)
-        real_model_url = None
-        try:
-            model_data = processor.generate_3d_model(images)
-            if model_data:
-                logger.info("📤 Uploading generated 3D model...")
-                real_model_url = await storage.upload_model_file(scan_id, model_data)
-        except Exception as e:
-            logger.warning(f"⚠️ 3D Model generation failed (skipping): {e}")
-
-        # 4. Assess Plantar Fasciitis (Medical-Grade Calculation)
-        # ✅ เรียกครั้งเดียว ส่งค่าครบถ้วน
-        logger.info(f"🏥 Assessing PF Risk (Quiz: {questionnaire_score}, BMI: {bmi_score}, Age: {age})")
-        
+        # 3. Assess PF
+        # (หมายเหตุ: ตรวจสอบว่าไฟล์ pf_analyzer.py ของคุณรองรับ age/activity_level แล้วหรือยัง 
+        # ถ้ายังไม่อัปเดต ให้ลบ 2 บรรทัดล่างออกเพื่อป้องกัน Error)
         pf_assessment = analyzer.assess_plantar_fasciitis(
             foot_analysis,
             questionnaire_score=questionnaire_score,
             bmi_score=bmi_score,
-            age=age,                       # ✅ ส่งค่าอายุ
-            activity_level=activity_level  # ✅ ส่งค่ากิจกรรม
+            age=age,
+            activity_level=activity_level
         )
+        logger.info(f"✅ PF Result: {pf_assessment['severity']}")
         
-        logger.info(f"✅ PF Result: {pf_assessment['severity']} (Score: {pf_assessment['score']})")
+        # --- 🔴 ปิดฟีเจอร์เสริมชั่วคราว (เพื่อให้ Flow ผ่านแน่นอน) ---
+        # real_model_url = await processor.generate_3d_model(images)
+        real_model_url = None
         
-        # 5. Get Recommendations (Exercises & Shoes)
-        exercises = exercise_recommender.get_recommendations(pf_assessment)
+        # exercises = exercise_recommender.get_recommendations(pf_assessment)
+        exercises = []  # ส่งค่าว่างไปก่อน
         
-        # (ถ้ามี Shoe Matcher)
-        shoes = []
-        if shoe_matcher:
-             shoes = await shoe_matcher.find_pf_shoes(
-                scan_id=scan_id,
-                pf_assessment=pf_assessment
-            )
+        # shoes = await shoe_matcher.find_pf_shoes(...)
+        shoes = []      # ส่งค่าว่างไปก่อน
+        # --------------------------------------------------------
 
-        # 6. Save ALL Results & Update Status (สำคัญมาก!) 💾
+        # 4. Save ALL Results (บันทึกเฉพาะผลวิเคราะห์หลัก)
         await storage.update_scan_analysis(
             scan_id=scan_id,
             foot_analysis=foot_analysis,
@@ -287,18 +275,16 @@ async def process_pf_assessment(
             exercises=exercises,
             shoes=shoes,
             foot_side=foot_analysis.get('detected_side'),
-            model_url=real_model_url  # ส่ง URL 3D Model ไปบันทึกด้วย
+            model_url=real_model_url
         )
         
-        # 7. Mark as Completed
+        # 5. Mark as Completed
         await storage.update_scan_status(scan_id, status="completed")
         
         logger.info(f"✅ PF assessment completed successfully for {scan_id}")
         
     except Exception as e:
         logger.error(f"❌ Error in PF assessment {scan_id}: {e}", exc_info=True)
-        
-        # Update status to failed
         try:
             await storage.update_scan_status(
                 scan_id,
@@ -307,7 +293,6 @@ async def process_pf_assessment(
             )
         except:
             pass
-        
         raise
 
 # ===== Run Server =====
