@@ -11,7 +11,6 @@ Fixed Issues:
 """
 
 import httpx
-import asyncio
 import numpy as np
 import cv2
 from typing import Dict, Any, Tuple, Optional, List
@@ -70,94 +69,6 @@ class PlantarFasciitisAnalyzer:
         self.config = ProcessingConfig()
         self.timeout = httpx.Timeout(30.0)
         logger.info("🏥 Medical-Grade Analyzer initialized (Staheli's Method)")
-    
-    # ==================== IMAGE DOWNLOAD ====================
-    
-    async def download_images(self, urls: List[str]) -> List[bytes]:
-        """
-        Download images with retry logic and validation
-        
-        Args:
-            urls: List of image URLs
-            
-        Returns:
-            List of image bytes
-            
-        Raises:
-            ValueError: If no images can be downloaded
-        """
-        if not urls:
-            raise ValueError("ไม่มี URL ของรูปภาพ")
-        
-        images = []
-        errors = []
-        
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            tasks = [self._download_with_retry(client, url, retries=3) for url in urls]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    error_msg = f"รูปที่ {i+1}: {str(result)}"
-                    errors.append(error_msg)
-                    logger.error(f"❌ {error_msg}")
-                elif result:
-                    images.append(result)
-        
-        if not images:
-            error_detail = "\n".join(errors) if errors else "ไม่ทราบสาเหตุ"
-            raise ValueError(f"ไม่สามารถดาวน์โหลดรูปภาพได้:\n{error_detail}")
-        
-        if errors:
-            logger.warning(f"⚠️ Downloaded {len(images)}/{len(urls)} images, {len(errors)} failed")
-        else:
-            logger.info(f"✅ Downloaded {len(images)} images successfully")
-        
-        return images
-    
-    async def _download_with_retry(
-        self, 
-        client: httpx.AsyncClient, 
-        url: str, 
-        retries: int = 3
-    ) -> Optional[bytes]:
-        """Download single image with retry and validation"""
-        last_error = None
-        
-        for attempt in range(retries):
-            try:
-                logger.info(f"📥 Downloading {url} (attempt {attempt + 1}/{retries})")
-                resp = await client.get(url, follow_redirects=True)
-                resp.raise_for_status()
-                
-                # Validate content type
-                content_type = resp.headers.get('content-type', '')
-                if not content_type.startswith('image/'):
-                    raise ValueError(f"ไฟล์ไม่ใช่รูปภาพ (type: {content_type})")
-                
-                # Validate size
-                content_length = len(resp.content)
-                if content_length < 1000:  # < 1KB
-                    raise ValueError("ไฟล์เล็กเกินไป (อาจเสียหาย)")
-                if content_length > 10 * 1024 * 1024:  # > 10MB
-                    raise ValueError("ไฟล์ใหญ่เกินไป (max 10MB)")
-                
-                logger.info(f"✅ Downloaded {content_length} bytes")
-                return resp.content
-                
-            except httpx.HTTPStatusError as e:
-                last_error = f"HTTP {e.response.status_code}"
-            except httpx.TimeoutException:
-                last_error = "Timeout - เครือข่ายช้า"
-            except Exception as e:
-                last_error = str(e)
-            
-            logger.warning(f"⚠️ Attempt {attempt + 1} failed: {last_error}")
-            
-            if attempt < retries - 1:
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
-        
-        raise Exception(f"ดาวน์โหลดล้มเหลวหลังพยายาม {retries} ครั้ง: {last_error}")
     
     # ==================== IMAGE PREPROCESSING ====================
     
