@@ -5,7 +5,7 @@ Plantar ML Service
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager  # 👈 เพิ่มบรรทัดนี้
 import os
