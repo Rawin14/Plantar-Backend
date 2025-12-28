@@ -183,7 +183,7 @@ async def process_pf_assessment(
         
         # 2. Download images
         try:
-            images = await analyzer.download_images(image_urls)
+            images = await processor.download_images(image_urls)
             
             # ✅ เพิ่ม debug logging
             logger.info(f"📊 Downloaded images type: {type(images)}")
