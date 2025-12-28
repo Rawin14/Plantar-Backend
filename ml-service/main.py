@@ -224,22 +224,22 @@ async def process_pf_assessment(
     image_urls: List[str],
     questionnaire_score: float,
     bmi_score: float,
-    age: int,              # ✅ รับค่า
-    activity_level: str    # ✅ รับค่า
-):
+    age: int,
+    activity_level: str
+): 
     """Background task: ประมวลผลและประเมินอาการรองช้ำ"""
     try:
         logger.info(f"🔄 Starting PF assessment for {scan_id}")
         
-        # 0. Update Status to processing
+        # 0. Update Status
         await storage.update_scan_status(scan_id, status="processing")
         
-        # 1. Download images
+        # 1. Download images (✅ แก้แล้วใช้ processor)
         logger.info(f"📥 Downloading {len(image_urls)} images...")
-        images = await analyzer.download_images(image_urls)
+        images = await processor.download_images(image_urls)
         logger.info(f"✅ Downloaded {len(images)} images")
         
-        # 2. Analyze foot structure
+        # 2. Analyze foot structure (ใช้อันนี้ analyzer ถูกแล้ว)
         logger.info(f"🔍 Analyzing foot structure...")
         foot_analysis = analyzer.analyze_foot_structure(images)
         logger.info(f"✅ Analysis: arch={foot_analysis['arch_type']}")
