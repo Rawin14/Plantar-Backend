@@ -142,11 +142,19 @@ class ProcessRequest(BaseModel):
     scan_id: str = Field(..., min_length=1, description="Scan ID from database")
     image_urls: List[str] = Field(..., min_items=1, description="Image URLs")
     questionnaire_score: float = Field(0.0, ge=0.0, le=100.0, description="FFI score (0-100)")
-    bmi_score: float = Field(0.0, ge=0.0, le=5.0, description="BMI risk score (0-5)")
+    
+    # ⚠️ แก้ไข: ปลดล็อกค่า BMI ให้เกิน 5 ได้ (เพื่อให้รับค่า BMI จริง เช่น 25.0)
+    bmi_score: float = Field(0.0, ge=0.0, description="Actual BMI Value (e.g. 24.5)")
+    
+    # ✅ เพิ่ม: รับค่าอายุ
+    age: int = Field(0, ge=0, description="Patient age")
+    
+    # ✅ เพิ่ม: รับระดับกิจกรรม
+    activity_level: str = Field("moderate", description="sedentary, moderate, high")
     
     @validator('image_urls')
     def validate_urls(cls, v):
-        """Validate image URLs"""
+        # (โค้ดเดิม...)
         for url in v:
             if not url.startswith(('http://', 'https://')):
                 raise ValueError(f"Invalid URL: {url}")
@@ -172,7 +180,9 @@ async def process_pf_assessment(
     scan_id: str,
     image_urls: List[str],
     questionnaire_score: float,
-    bmi_score: float
+    bmi_score: float,
+    age: int,              # ✅ เพิ่ม
+    activity_level: str    # ✅ เพิ่ม
 ):
     """Background task for PF assessment"""
     try:
@@ -212,7 +222,9 @@ async def process_pf_assessment(
         pf_assessment = analyzer.assess_plantar_fasciitis(
             foot_analysis,
             questionnaire_score=questionnaire_score,
-            bmi_score=bmi_score
+            bmi_score=bmi_score,
+            age=age,                       # ✅ ส่งค่าอายุ
+            activity_level=activity_level  # ✅ ส่งค่ากิจกรรม
         )
         
         logger.info(f"🏥 PF Assessment: {pf_assessment['severity_thai']}, "
@@ -320,7 +332,9 @@ async def process_scan(
             request.scan_id,
             request.image_urls,
             request.questionnaire_score,
-            request.bmi_score
+            request.bmi_score,
+            request.age,             # ✅ ส่งค่า
+            request.activity_level   # ✅ ส่งค่า
         )
         
         logger.info(f"✅ Queued: {scan_id}")

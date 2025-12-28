@@ -322,48 +322,85 @@ class PlantarFasciitisAnalyzer:
         scores = {ArchType.FLAT: 0.4, ArchType.HIGH: 0.3, ArchType.SEVERE_HIGH: 0.2, ArchType.NORMAL: 0.6}
         return scores.get(arch, 0.5)
     
-    def assess_plantar_fasciitis(self, foot: Dict[str, Any], quiz: float = 0.0, bmi: float = 0.0) -> Dict[str, Any]:
-        logger.info(f"🏥 Assessing PF risk (Quiz: {quiz}, BMI: {bmi})")
+    def assess_plantar_fasciitis(
+        self, 
+        foot_analysis: Dict[str, Any], 
+        questionnaire_score: float = 0.0, # FFI Score (0-100)
+        bmi_score: float = 0.0,
+        age: int = 0,             # ✅ รับค่าอายุเพิ่ม
+        activity_level: str = "moderate" # ✅ รับค่ากิจกรรมเพิ่ม (sedentary, moderate, high)
+    ) -> Dict[str, Any]:
         
-        arch_type = foot['arch_type']
+        logger.info(f"🏥 Assessing PF Risk (Quiz: {questionnaire_score}, BMI: {bmi_score}, Age: {age})")
         
-        if 'flat' in arch_type: risk = 25
-        elif 'high' in arch_type: risk = 20
-        else: risk = 5
+        arch_type = foot_analysis['arch_type']
         
-        total = risk + quiz + (bmi * 5)
-        score = min(100, total)
+        # 1. Arch Risk (25%)
+        if arch_type in ['flat_foot', 'severe_high_arch']: arch_risk = 25
+        elif arch_type == 'high_arch': arch_risk = 15
+        else: arch_risk = 5
+            
+        # 2. BMI Risk (20%)
+        # สมมติ bmi_score ที่รับมาเป็นค่า BMI จริงๆ (เช่น 24.5) ไม่ใช่คะแนน 0-5
+        if bmi_score >= 30: bmi_risk = 20
+        elif bmi_score >= 25: bmi_risk = 10
+        else: bmi_risk = 0
+            
+        # 3. Age Risk (10%)
+        if 40 <= age <= 60: age_risk = 10
+        elif age > 60: age_risk = 5
+        else: age_risk = 0
+            
+        # 4. Questionnaire/FFI Risk (40%) - น้ำหนักเยอะสุด
+        quiz_risk = questionnaire_score * 0.40
         
-        if score < 30: sev, sev_th = "low", "ต่ำ"
-        elif score < 60: sev, sev_th = "medium", "ปานกลาง"
+        # 5. Activity Risk (5%)
+        act_risk = 15 if activity_level == 'high' else (5 if activity_level == 'sedentary' else 0)
+        
+        # รวมคะแนน (Max 100)
+        total_score = arch_risk + bmi_risk + age_risk + quiz_risk + act_risk
+        final_score = min(100, total_score)
+        
+        # แปลผลความรุนแรง
+        if final_score < 30: sev, sev_th = "low", "ต่ำ"
+        elif final_score < 60: sev, sev_th = "medium", "ปานกลาง"
         else: sev, sev_th = "high", "สูง"
         
-        factors = []
-        if bmi >= 2: factors.append("BMI สูง")
-        if 'flat' in arch_type: factors.append("เท้าแบน")
-        if 'high' in arch_type: factors.append("อุ้งเท้าสูง")
+        # สร้าง Risk Factors List
+        risk_factors = []
+        if bmi_score >= 25: risk_factors.append(f"น้ำหนักเกินเกณฑ์ (BMI {bmi_score:.1f})")
+        if arch_type != 'normal': risk_factors.append(f"รูปเท้าผิดปกติ ({arch_type})")
+        if 40 <= age <= 60: risk_factors.append("ช่วงอายุมีความเสี่ยง")
+        if questionnaire_score > 40: risk_factors.append("คะแนนอาการปวดสูง")
         
         return {
             'severity': sev,
             'severity_thai': sev_th,
-            'score': round(score, 1),
+            'score': round(final_score, 1),
             'arch_type': arch_type,
             'indicators': {
-                'scan_score': foot.get('staheli_index', 0),
-                'quiz_score': quiz,
-                'bmi_score': bmi,
-                'arch_risk': risk
+                'scan_score': foot_analysis.get('staheli_index', 0),
+                'questionnaire_score': questionnaire_score,
+                'bmi_score': bmi_score,
+                'arch_risk_score': arch_risk
             },
-            'risk_factors': factors,
-            'recommendations': self._recommendations(sev, arch_type)
+            'risk_factors': risk_factors,
+            'recommendations': self._generate_recommendations(sev, arch_type, bmi_score)
         }
-    
-    def _recommendations(self, sev: str, arch: str) -> List[str]:
+
+    def _generate_recommendations(self, sev: str, arch: str, bmi: float) -> List[str]:
         recs = []
-        if 'flat' in arch: recs.append("ใช้รองเท้าที่มี Arch Support")
-        elif 'high' in arch: recs.append("ใช้รองเท้าที่มี Cushioning ดี")
-        recs.append("ยืดเหยียดกล้ามเนื้อน่องและ Plantar Fascia")
-        if sev == "high": recs.append("⚠️ ควรพบแพทย์เพื่อตรวจวินิจฉัยเพิ่มเติม")
+        if 'flat' in arch: recs.append("ใช้รองเท้าที่มี Arch Support หนุนอุ้งเท้า")
+        elif 'high' in arch: recs.append("ใช้รองเท้าพื้นนุ่ม (Cushioning) เพื่อลดแรงกระแทก")
+        
+        if bmi >= 25: recs.append("ควบคุมน้ำหนักเพื่อลดแรงกดที่ฝ่าเท้า")
+        
+        recs.append("บริหารยืดเหยียดเอ็นร้อยหวายและพังผืดใต้ฝ่าเท้า")
+        
+        if sev == "high": 
+            recs.append("⚠️ ควรพบแพทย์เพื่อตรวจวินิจฉัยเพิ่มเติม")
+            recs.append("ประคบเย็นบริเวณที่ปวด 15-20 นาที")
+            
         return recs
     
 # import httpx
