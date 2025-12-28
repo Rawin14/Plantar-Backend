@@ -451,7 +451,7 @@ class PlantarFasciitisAnalyzer:
         Main foot structure analysis function
         
         Args:
-            images: List of image bytes
+            images: List of image bytes (NOT a list of lists!)
             
         Returns:
             Analysis results dictionary
@@ -461,16 +461,34 @@ class PlantarFasciitisAnalyzer:
         """
         logger.info(f"🔬 Analyzing {len(images)} image(s)")
         
+        # ✅ เพิ่ม validation
         if not images:
-            raise ValueError("No images provided")
+            raise ValueError("ไม่มีรูปภาพให้วิเคราะห์")
+        
+        if not isinstance(images, list):
+            raise ValueError(f"images ต้องเป็น list, ได้รับ: {type(images)}")
+        
+        # ✅ ตรวจสอบ type ของ element แรก
+        first_image = images
+        
+        if not isinstance(first_image, bytes):
+            raise ValueError(
+                f"แต่ละรูปต้องเป็น bytes, ได้รับ: {type(first_image)}\n"
+                f"ตรวจสอบว่า download_images() return ถูกต้องหรือไม่"
+            )
         
         try:
             # 1. Load image
-            nparr = np.frombuffer(images, np.uint8)
+            logger.info(f"📥 Loading image: {len(first_image)} bytes")
+            nparr = np.frombuffer(first_image, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
             if img is None:
-                raise ValueError("Cannot decode image - file may be corrupted")
+                raise ValueError(
+                    "ไม่สามารถอ่านรูปภาพได้ - ไฟล์อาจเสียหายหรือไม่ใช่รูปภาพ"
+                )
+            
+            logger.info(f"✅ Image loaded: {img.shape}")
             
             # 2. Preprocess
             img_proc, binary = self._preprocess_image(img)
@@ -493,7 +511,7 @@ class PlantarFasciitisAnalyzer:
             arch = self._calculate_arch_indices(mask)
             
             # 8. Detect side
-            side = self._detect_side(cont2, img_align.shape)  # ✅ Fixed: was img_align.shape
+            side = self._detect_side(cont2, img_align.shape)
             
             # 9. Calculate confidence
             conf = self._calc_confidence(arch, rot)
@@ -502,12 +520,12 @@ class PlantarFasciitisAnalyzer:
             return {
                 'arch_type': arch['arch_type'].value,
                 'detected_side': side,
-                'arch_height_ratio': arch['staheli_index'],  # Legacy compatibility
+                'arch_height_ratio': arch['staheli_index'],
                 'staheli_index': arch['staheli_index'],
                 'chippaux_index': arch['chippaux_index'],
                 'heel_alignment': 'neutral',
-                'foot_length_cm': 0.0,  # Requires calibration
-                'foot_width_cm': 0.0,   # Requires calibration
+                'foot_length_cm': 0.0,
+                'foot_width_cm': 0.0,
                 'pressure_points': self._pressure(arch['arch_type']),
                 'flexibility_score': self._flexibility(arch['arch_type']),
                 'confidence': conf,
@@ -522,14 +540,14 @@ class PlantarFasciitisAnalyzer:
             }
             
         except ValueError as e:
-            # Re-raise known errors
+            # Known errors - re-raise with context
             logger.error(f"❌ Validation error: {e}")
             raise
         except Exception as e:
-            # Log unexpected errors
+            # Unexpected errors
             logger.error(f"❌ Unexpected error: {e}", exc_info=True)
             raise ValueError(f"Analysis failed: {str(e)}")
-    
+        
     # ==================== HELPER FUNCTIONS ====================
     
     def _pressure(self, arch: ArchType) -> Dict[str, float]:

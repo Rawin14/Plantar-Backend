@@ -184,19 +184,28 @@ async def process_pf_assessment(
         # 2. Download images
         try:
             images = await analyzer.download_images(image_urls)
+            
+            # ✅ เพิ่ม debug logging
+            logger.info(f"📊 Downloaded images type: {type(images)}")
+            logger.info(f"📊 Number of images: {len(images)}")
+            if images:
+                logger.info(f"📊 First image type: {type(images)}")
+                logger.info(f"📊 First image size: {len(images)} bytes")
+            
         except Exception as e:
             raise ValueError(f"ไม่สามารถดาวน์โหลดรูปภาพได้: {str(e)}")
         
         # 3. Analyze foot
         try:
+            # ✅ ส่ง images (list of bytes) เข้าไปตรงๆ
             foot_analysis = analyzer.analyze_foot_structure(images)
+            
             logger.info(f"📊 Foot Analysis: {foot_analysis['arch_type']}, "
                        f"Staheli={foot_analysis['staheli_index']:.3f}")
+            
         except ValueError as e:
-            # Business logic error (bad image quality, etc.)
             raise ValueError(f"การวิเคราะห์รูปเท้าล้มเหลว: {str(e)}")
         except Exception as e:
-            # Unexpected error
             raise Exception(f"เกิดข้อผิดพลาดในการประมวลผลภาพ: {str(e)}")
         
         # 4. Assess PF
@@ -235,21 +244,18 @@ async def process_pf_assessment(
         logger.info(f"✅ Completed: {scan_id}")
         
     except ValueError as e:
-        # Known business errors
         logger.error(f"❌ Business error in {scan_id}: {e}")
         await storage.update_scan_status(
             scan_id,
             status="failed",
             error_message=str(e)
-        )
-        
+        )        
     except Exception as e:
-        # Unexpected errors
         logger.error(f"❌ Unexpected error in {scan_id}: {e}", exc_info=True)
         await storage.update_scan_status(
             scan_id,
             status="failed",
-            error_message="เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่"
+            error_message="เกิดข้อผิดพลาดภายในระบบ"
         )
 
 # ===== Endpoints =====
