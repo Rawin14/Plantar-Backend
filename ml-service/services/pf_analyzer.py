@@ -139,6 +139,10 @@ class PlantarFasciitisAnalyzer:
     # ==================== FOOT ALIGNMENT ====================
     
     def _align_foot_upright(self, img: np.ndarray, contour: np.ndarray) -> Tuple[np.ndarray, float]:
+        """
+        Align foot using PCA (Principal Component Analysis)
+        Fixed: Center coordinate extraction
+        """
         pts = contour.reshape(-1, 2).astype(np.float64)
         mean, eigenvectors = cv2.PCACompute(pts, mean=None)[:2]
         
@@ -148,13 +152,18 @@ class PlantarFasciitisAnalyzer:
         rotation = angle - 90
         
         h, w = img.shape[:2]
-        center = tuple(mean.astype(int))
+        
+        # ✅ FIX: ดึงค่า x, y ออกมาเป็น int ทีละตัว เพื่อให้ได้ Tuple (x, y) จริงๆ
+        center = (int(mean[0,0]), int(mean[0,1]))
+        
         M = cv2.getRotationMatrix2D(center, rotation, 1.0)
         
+        # Calculate new image size
         cos, sin = np.abs(M[0, 0]), np.abs(M[0, 1])
         nW = int(h * sin + w * cos)
         nH = int(h * cos + w * sin)
         
+        # Adjust rotation matrix
         M[0, 2] += (nW / 2) - center[0]
         M[1, 2] += (nH / 2) - center[1]
         
