@@ -279,7 +279,7 @@ class PlantarFasciitisAnalyzer:
             cv2.drawContours(mask, [cont2], -1, 255, -1)
             
             arch = self._calculate_arch_indices(mask)
-            side = self._detect_side(cont2, img_align.shape)
+            side = self._detect_side(cont2, img_align.shape[1])
             conf = self._calc_confidence(arch, rot)
             
             return {
