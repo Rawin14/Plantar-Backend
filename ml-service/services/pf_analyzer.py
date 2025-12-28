@@ -2,11 +2,6 @@
 Medical-Grade Plantar Fasciitis Analyzer
 Version: 2.1 - Evidence-Based (Staheli's Method)
 
-Fixed Issues:
-- ✅ Fixed validation logic (images[0]) bug
-- ✅ Fixed _get_max_width() indexing error
-- ✅ Fixed _calculate_arch_indices() shape handling
-- ✅ Fixed _detect_side() width parameter
 """
 
 import httpx
@@ -224,12 +219,13 @@ class PlantarFasciitisAnalyzer:
         else:
             return ArchType.FLAT
     
-    def _detect_side(self, contour: np.ndarray, shape: Tuple[int, int]) -> str:
+    def _detect_side(self, contour: np.ndarray, width: int) -> str:
         M = cv2.moments(contour)
         if M["m00"] == 0:
             return "unknown"
+        
         cx = int(M["m10"] / M["m00"])
-        return "left" if cx < (shape[1] // 2) else "right"
+        return "left" if cx < (width // 2) else "right"
     
     def _calc_confidence(self, arch_data: Dict, rotation: float) -> float:
         conf = 0.85
