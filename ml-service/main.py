@@ -274,9 +274,9 @@ async def process_pf_assessment(
         # (ถ้ามี Shoe Matcher)
         shoes = []
         if shoe_matcher:
-             shoes = await shoe_matcher.find_matching_shoes(
-                arch_type=foot_analysis['arch_type'],
-                severity=pf_assessment['severity']
+             shoes = await shoe_matcher.find_pf_shoes(
+                scan_id=scan_id,
+                pf_assessment=pf_assessment
             )
 
         # 6. Save ALL Results & Update Status (สำคัญมาก!) 💾
