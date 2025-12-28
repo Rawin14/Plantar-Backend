@@ -298,3 +298,52 @@ class SupabaseStorage:
         except Exception as e:
             logger.error(f"❌ Failed to upload 3D model: {e}")
             return None
+        
+    async def update_scan_analysis(
+        self,
+        scan_id: str,
+        foot_analysis: Dict[str, Any],
+        pf_assessment: Dict[str, Any],
+        exercises: List[Dict],
+        shoes: List[Dict],
+        foot_side: Optional[str] = None  # ✅ เพิ่ม parameter
+    ):
+        """Update scan with analysis results"""
+        try:
+            update_data = {
+                # Foot analysis
+                "arch_type": foot_analysis['arch_type'],
+                "staheli_index": foot_analysis.get('staheli_index', 0),  # ✅ เพิ่ม
+                "chippaux_index": foot_analysis.get('chippaux_index', 0),  # ✅ เพิ่ม
+                "arch_height_ratio": foot_analysis.get('arch_height_ratio', 0),
+                "detected_side": foot_analysis.get('detected_side'),
+                "foot_side": foot_side,  # ✅ เพิ่ม
+                "confidence": foot_analysis.get('confidence', 0),
+                
+                # PF assessment
+                "pf_severity": pf_assessment['severity'],
+                "pf_score": pf_assessment['score'],
+                "risk_factors": pf_assessment.get('risk_factors', []),
+                
+                # Recommendations
+                "exercises": exercises,
+                "recommended_shoes": [s['id'] for s in shoes] if shoes else [],
+                
+                # Metadata
+                "analysis_method": foot_analysis.get('method', 'Unknown'),  # ✅ เพิ่ม
+                "processed_at": datetime.utcnow().isoformat()
+            }
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.patch(
+                    f"{self.rest_url}/foot_scans?id=eq.{scan_id}",
+                    headers={**self.headers, "Prefer": "return=minimal"},
+                    json=update_data
+                )
+                response.raise_for_status()
+                
+                logger.info(f"✅ Updated scan {scan_id} with analysis")
+                
+        except Exception as e:
+            logger.error(f"Error updating scan analysis: {e}")
+            raise

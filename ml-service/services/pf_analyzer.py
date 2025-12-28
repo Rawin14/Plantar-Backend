@@ -1,288 +1,362 @@
 """
-Plantar Fasciitis Analyzer (Ultimate Precision)
-Features:
-1. Auto-Straightening (PCA-based Rotation) - แก้ปัญหาถ่ายรูปเอียง
-2. CLAHE + Double Thresholding - แก้ปัญหาแสงไม่เท่ากัน
-3. Morphological Reconstruction - ซ่อมแซมรอยเท้าที่ขาดหาย
+Medical-Grade Plantar Fasciitis Analyzer
+Version: 2.0 - Evidence-Based (Staheli's Method)
 """
 
-import httpx
-import asyncio
-from typing import List, Dict, Any
-import logging
 import numpy as np
 import cv2
+from typing import Dict, Any, Tuple, Optional, List
+import logging
+from dataclasses import dataclass
+from enum import Enum
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# ==================== CONFIGURATION ====================
+
+class ArchType(Enum):
+    SEVERE_HIGH = "severe_high_arch"
+    HIGH = "high_arch"
+    NORMAL = "normal"
+    FLAT = "flat_foot"
+
+class Severity(Enum):
+    LOW = "low"
+    MODERATE = "moderate"
+    HIGH = "high"
+    VERY_HIGH = "very_high"
+
+@dataclass
+class ProcessingConfig:
+    TARGET_HEIGHT: int = 1000
+    MIN_FOOT_AREA: int = 5000
+    MAX_FOOT_AREA_RATIO: float = 0.95
+    MIN_ASPECT_RATIO: float = 1.2
+    MAX_ASPECT_RATIO: float = 4.0
+    CLAHE_CLIP_LIMIT: float = 2.5
+    CLAHE_GRID_SIZE: Tuple[int, int] = (10, 10)
+    GAUSSIAN_KERNEL: Tuple[int, int] = (7, 7)
+    ADAPTIVE_BLOCK_SIZE: int = 31
+    ADAPTIVE_C: int = 8
+    MORPH_CLOSE_KERNEL: int = 9
+    MORPH_OPEN_KERNEL: int = 5
+
+# ==================== MAIN CLASS ====================
+
 class PlantarFasciitisAnalyzer:
+    """
+    Medical-grade analyzer based on Staheli's Arch Index (validated 1987)
+    """
+    
     def __init__(self):
-        self.timeout = httpx.Timeout(30.0)
-        logger.info("🔧 Initializing PF Analyzer (Ultimate Precision Mode)")
+        self.config = ProcessingConfig()
+        logger.info("🏥 Medical-Grade Analyzer initialized")
     
-    async def download_images(self, urls: List[str]) -> List[bytes]:
-        images = []
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            tasks = [self._download_single(client, url) for url in urls]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if result and not isinstance(result, Exception):
-                    images.append(result)
-        if not images: raise ValueError("No images downloaded")
-        return images
-    
-    async def _download_single(self, client: httpx.AsyncClient, url: str) -> bytes:
-        try:
-            resp = await client.get(url); resp.raise_for_status(); return resp.content
-        except: return None
-
-    def _align_foot_upright(self, img, contour):
-        """
-        ฟังก์ชันหมุนภาพให้เท้าตั้งตรง (90 องศา) โดยใช้ PCA orientation
-        ช่วยให้การตัดแบ่ง 3 ส่วนแม่นยำขึ้นมหาศาล
-        """
-        # 1. หา Orientation ของรอยเท้า
-        sz = len(contour)
-        data_pts = np.empty((sz, 2), dtype=np.float64)
-        for i in range(data_pts.shape[0]):
-            data_pts[i,0] = contour[i,0,0]
-            data_pts[i,1] = contour[i,0,1]
-            
-        mean = np.empty((0))
-        mean, eigenvectors, eigenvalues = cv2.PCACompute2(data_pts, mean)
-        
-        # 2. คำนวณมุม (Angle)
-        angle = np.arctan2(eigenvectors[0,1], eigenvectors[0,0]) * (180 / np.pi)
-        
-        # ปรับมุมให้ตั้งตรง (Vertical)
-        # ปกติเท้ามักจะเอียงๆ เราต้องการให้แกนหลักขนานกับแกน Y
-        if angle < 0: angle += 180
-        rotation_angle = angle - 90 
-        
-        # ถ้าหมุนแล้วกลับหัว (ส้นเท้าชี้ฟ้า) เดี๋ยวเราเช็คทีหลังตอนตัดแบ่ง
-        
-        # 3. หมุนภาพ
+    def _preprocess_image(self, img: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Advanced preprocessing with CLAHE + Morphology"""
         h, w = img.shape[:2]
-        center = (int(mean[0,0]), int(mean[0,1]))
-        rot_mat = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
-        rotated_img = cv2.warpAffine(img, rot_mat, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255,255,255))
+        scale = self.config.TARGET_HEIGHT / h
+        img_resized = cv2.resize(img, (int(w * scale), self.config.TARGET_HEIGHT), 
+                                 interpolation=cv2.INTER_LANCZOS4)
         
-        return rotated_img
-
-    def analyze_foot_structure(self, images: List[bytes]) -> Dict[str, Any]:
-        logger.info(f"🔍 Analyzing {len(images)} images (Ultimate)...")
-        if not images: raise ValueError("ไม่พบรูปภาพ")
-
-        try:
-            # 1. Load & Basic Resize
-            nparr = np.frombuffer(images[0], np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            target_height = 800
-            h, w = img.shape[:2]
-            scale = target_height / h
-            new_w = int(w * scale)
-            img = cv2.resize(img, (new_w, target_height))
-
-            # ---------------------------------------------------------
-            # 2. Advanced Segmentation (แยกพื้นหลัง)
-            # ---------------------------------------------------------
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            
-            # CLAHE: ปรับแสงให้เท่ากันทั้งภาพ (แก้ปัญหาเงาบัง)
-            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-            enhanced_gray = clahe.apply(gray)
-            
-            # Blur & Adaptive Threshold
-            blur = cv2.GaussianBlur(enhanced_gray, (9, 9), 0)
-            thresh = cv2.adaptiveThreshold(
-                blur, 255, 
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                cv2.THRESH_BINARY_INV, 
-                25, 5 # Tuned Parameters
-            )
-            
-            # Morphology: เชื่อมรอยเท้าที่ขาด + ลบจุดรบกวน
-            kernel_close = np.ones((7,7), np.uint8)
-            kernel_open = np.ones((5,5), np.uint8)
-            
-            thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_close, iterations=2)
-            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_open, iterations=1)
-            
-            # ---------------------------------------------------------
-            # 3. Initial Contour Detection & Validation
-            # ---------------------------------------------------------
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours: raise ValueError("ไม่พบรอยเท้า")
-            largest_contour = max(contours, key=cv2.contourArea)
-            
-            # Validation
-            area = cv2.contourArea(largest_contour)
-            img_area = img.shape[0] * img.shape[1]
-            
-            if area < 2000: raise ValueError("วัตถุเล็กเกินไป")
-            if (area / img_area) > 0.99: raise ValueError("วัตถุเต็มจอเกินไป")
-            
-            x, y, w, h = cv2.boundingRect(largest_contour)
-            aspect_ratio = float(h) / w if w > 0 else 0
-            if aspect_ratio < 1.0: raise ValueError("กรุณาถ่ายรูปแนวตั้ง")
-            
-            rect_area = w * h
-            extent = area / rect_area
-            if extent > 0.85: raise ValueError("วัตถุเป็นสี่เหลี่ยมตัน (ไม่ใช่รอยเท้า)")
-
-            # ---------------------------------------------------------
-            # 🚀 4. Auto-Straightening (หัวใจของความแม่นยำ)
-            # ---------------------------------------------------------
-            # หมุนภาพให้ตรงก่อนตัดแบ่ง 3 ส่วน
-            aligned_img = self._align_foot_upright(img, largest_contour)
-            
-            # ทำ Segmentation อีกรอบบนภาพที่หมุนแล้ว (เพื่อให้ได้ Mask ที่เป๊ะที่สุด)
-            gray_aligned = cv2.cvtColor(aligned_img, cv2.COLOR_BGR2GRAY)
-            clahe_aligned = clahe.apply(gray_aligned)
-            blur_aligned = cv2.GaussianBlur(clahe_aligned, (9, 9), 0)
-            thresh_aligned = cv2.adaptiveThreshold(
-                blur_aligned, 255, 
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                cv2.THRESH_BINARY_INV, 
-                25, 5
-            )
-            # Clean up mask again
-            thresh_aligned = cv2.morphologyEx(thresh_aligned, cv2.MORPH_CLOSE, kernel_close, iterations=2)
-            thresh_aligned = cv2.morphologyEx(thresh_aligned, cv2.MORPH_OPEN, kernel_open, iterations=1)
-            
-            # หา Contour ใหม่หลังหมุน
-            contours_new, _ = cv2.findContours(thresh_aligned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours_new: raise ValueError("Error processing aligned image")
-            final_contour = max(contours_new, key=cv2.contourArea)
-            
-            # ---------------------------------------------------------
-            # 5. Calculation (Arch Index) บนภาพที่ตรงเป๊ะ
-            # ---------------------------------------------------------
-            x, y, w, h = cv2.boundingRect(final_contour)
-            
-            # Create Clean Mask
-            foot_mask = np.zeros_like(thresh_aligned)
-            cv2.drawContours(foot_mask, [final_contour], -1, 255, thickness=cv2.FILLED)
-            foot_roi = foot_mask[y:y+h, x:x+w]
-            
-            # ตรวจสอบว่ากลับหัวหรือไม่? (ปกติส้นเท้าจะแคบกว่าจมูกเท้า)
-            # แบ่งครึ่งบน/ล่าง เช็คพื้นที่
-            half_h = h // 2
-            top_part = cv2.countNonZero(foot_roi[:half_h, :])
-            bottom_part = cv2.countNonZero(foot_roi[half_h:, :])
-            
-            # โดยธรรมชาติ ส่วนนิ้ว+จมูกเท้า (Forefoot) จะใหญ่กว่าส้นเท้า (Heel)
-            # ถ้าข้างบนเล็กกว่าข้างล่าง แปลว่า ข้างบน=ส้นเท้า (ปกติ)
-            # แต่ถ้าข้างบนใหญ่กว่า แปลว่ารูปกลับหัว (นิ้วอยู่บน) -> ไม่ต้องทำอะไร เพราะเราตัดบนลงล่างตามปกติ
-            # *หมายเหตุ: Wet Test ส่วนใหญ่นิ้วเท้าอยู่ด้านบน*
-            
-            # Logic: ตัดนิ้ว 20%
-            foot_len = h
-            toes_len = int(foot_len * 0.20)
-            sole_len = foot_len - toes_len
-            section_h = sole_len // 3
-            start_y = toes_len
-            
-            region_b = foot_roi[start_y + section_h : start_y + (2 * section_h), :]
-            
-            # พื้นที่รวม (ไม่นับนิ้ว)
-            total_area_ABC = cv2.countNonZero(foot_roi[start_y:, :])
-            area_b = cv2.countNonZero(region_b)
-            
-            if total_area_ABC == 0: raise ValueError("Error calculating area")
-            
-            arch_index = area_b / total_area_ABC
-            
-            # Auto-Detect Side (Original logic on aligned image)
-            M = cv2.moments(final_contour)
-            cx = int(M["m10"] / M["m00"]) if M["m00"] != 0 else 0
-            # ภาพหมุนแล้ว center เทียบกับความกว้าง ROI
-            detected_side = "left" if cx < (aligned_img.shape[1] // 2) else "right"
-            
-            logger.info(f"📊 AI Precision Score: {arch_index:.4f} (Side: {detected_side})")
-
-            # ---------------------------------------------------------
-            # 6. Classification
-            # ---------------------------------------------------------
-            # High Arch: <= 0.21
-            # Normal: 0.21 - 0.26
-            # Flat: >= 0.26
-            
-            if arch_index <= 0.21:
-                arch_type = "high"
-                pressure_dist = {"heel": 0.8, "arch": 0.1, "ball": 0.6, "toes": 0.4}
-                flexibility = 0.4
-            elif arch_index >= 0.26:
-                arch_type = "flat"
-                pressure_dist = {"heel": 0.6, "arch": 0.8, "ball": 0.6, "toes": 0.4}
-                flexibility = 0.4
-            else:
-                arch_type = "normal"
-                pressure_dist = {"heel": 0.5, "arch": 0.4, "ball": 0.6, "toes": 0.6}
-                flexibility = 0.6
-
-            return {
-                "arch_type": arch_type,
-                "detected_side": detected_side,
-                "arch_height_ratio": float(arch_index),
-                "heel_alignment": "neutral",
-                "foot_length_cm": 25.0,
-                "foot_width_cm": 10.0,
-                "pressure_points": pressure_dist,
-                "flexibility_score": flexibility,
-                "confidence": 0.99, # มั่นใจขึ้นเพราะมี Align
-                "method": "Ultimate_Precision_AI"
-            }
-
-        except Exception as e:
-            logger.error(f"❌ Analysis failed: {e}")
-            raise ValueError(f"เกิดข้อผิดพลาด: {str(e)}")
-
-    def assess_plantar_fasciitis(self, foot_analysis, questionnaire_score=0.0, bmi_score=0):
-        # (ส่วนนี้คงเดิม)
-        logger.info(f"🏥 Assessing... (Quiz: {questionnaire_score}, BMI: {bmi_score})")
-        arch_type = foot_analysis['arch_type']
+        gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
         
-        scan_score_display = 50.0
-        if arch_type == 'flat': scan_score_display = 80.0
-        elif arch_type == 'high': scan_score_display = 70.0
+        # CLAHE
+        clahe = cv2.createCLAHE(self.config.CLAHE_CLIP_LIMIT, self.config.CLAHE_GRID_SIZE)
+        enhanced = clahe.apply(gray)
         
-        total = questionnaire_score + bmi_score
-        final_score = min((total / 20.0) * 100.0, 100.0)
+        # Gaussian Blur
+        blurred = cv2.GaussianBlur(enhanced, self.config.GAUSSIAN_KERNEL, 0)
         
-        if final_score < 40: sev, sev_th = "low", "ต่ำ"
-        elif final_score < 70: sev, sev_th = "medium", "กลาง"
-        else: sev, sev_th = "high", "สูง"
+        # Adaptive Threshold
+        binary = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, self.config.ADAPTIVE_BLOCK_SIZE, self.config.ADAPTIVE_C
+        )
         
-        risk_factors = []
-        if bmi_score >= 2: risk_factors.append("น้ำหนักตัวเกินเกณฑ์")
-        if arch_type == 'flat': risk_factors.append("เท้าแบน (Flat Arch)")
-        if arch_type == 'high': risk_factors.append("อุ้งเท้าสูง (High Arch)")
+        # Morphology
+        kernel_close = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, 
+            (self.config.MORPH_CLOSE_KERNEL, self.config.MORPH_CLOSE_KERNEL)
+        )
+        kernel_open = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (self.config.MORPH_OPEN_KERNEL, self.config.MORPH_OPEN_KERNEL)
+        )
         
-        indicators = {
-            "scan_part_score": foot_analysis['arch_height_ratio'],
-            "questionnaire_part_score": questionnaire_score,
-            "bmi_score": float(bmi_score),
-            "arch_collapse_score": scan_score_display,
-            "heel_pain_index": 50.0,
-            "flexibility_score": (1-foot_analysis['flexibility_score'])*100,
-            "foot_alignment_score": 15.0
-        }
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close, iterations=3)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_open, iterations=2)
+        
+        return img_resized, binary
+    
+    def _find_foot_contour(self, binary: np.ndarray, img_shape: Tuple) -> np.ndarray:
+        """Find and validate foot contour"""
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            raise ValueError("ไม่พบรอยเท้าในภาพ")
+        
+        largest = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(largest)
+        img_area = img_shape * img_shape
+        
+        if area < self.config.MIN_FOOT_AREA:
+            raise ValueError(f"รอยเท้าเล็กเกินไป ({area:.0f}px²)")
+        
+        if (area / img_area) > self.config.MAX_FOOT_AREA_RATIO:
+            raise ValueError("วัตถุเต็มเฟรม - ถ่ายให้เห็นพื้นหลัง")
+        
+        x, y, w, h = cv2.boundingRect(largest)
+        aspect = h / w if w > 0 else 0
+        
+        if aspect < self.config.MIN_ASPECT_RATIO:
+            raise ValueError("กรุณาถ่ายแนวตั้ง")
+        
+        if aspect > self.config.MAX_ASPECT_RATIO:
+            raise ValueError("รอยเท้ายาวผิดปกติ")
+        
+        extent = area / (w * h)
+        if extent > 0.88:
+            raise ValueError("รูปร่างไม่เหมือนเท้า")
+        
+        logger.info(f"✅ Contour OK: {area:.0f}px², aspect={aspect:.2f}")
+        return largest
+    
+    def _align_foot_upright(self, img: np.ndarray, contour: np.ndarray) -> Tuple[np.ndarray, float]:
+        """PCA-based alignment"""
+        pts = contour.reshape(-1, 2).astype(np.float64)
+        mean, eigenvectors = cv2.PCACompute(pts, mean=None)[:2]
+        
+        angle = np.arctan2(eigenvectors[0, 1], eigenvectors[0, 0]) * 180 / np.pi
+        if angle < 0:
+            angle += 180
+        rotation = angle - 90
+        
+        h, w = img.shape[:2]
+        center = tuple(mean.astype(int))
+        M = cv2.getRotationMatrix2D(center, rotation, 1.0)
+        
+        cos, sin = np.abs(M[0, 0]), np.abs(M[0, 1])
+        nW, nH = int(h * sin + w * cos), int(h * cos + w * sin)
+        
+        M[0, 2] += (nW / 2) - center
+        M[1, 2] += (nH / 2) - center
+        
+        aligned = cv2.warpAffine(img, M, (nW, nH), 
+                                 flags=cv2.INTER_LANCZOS4,
+                                 borderValue=(255, 255, 255))
+        
+        logger.info(f"🔄 Aligned: {rotation:.1f}°")
+        return aligned, rotation
+    
+    def _calculate_arch_indices(self, foot_mask: np.ndarray) -> Dict[str, Any]:
+        """
+        Staheli's Arch Index: midfoot_width / heel_width
+        Chippaux-Smirak: midfoot_width / forefoot_width
+        
+        Classification:
+        < 0.0: Severe High
+        0.0-0.45: High
+        0.45-1.05: Normal
+        > 1.05: Flat
+        """
+        h = foot_mask.shape
+        
+        # Anatomical regions
+        forefoot = foot_mask[:int(h * 0.35), :]
+        midfoot = foot_mask[int(h * 0.35):int(h * 0.65), :]
+        heel = foot_mask[int(h * 0.65):, :]
+        
+        fw = self._get_max_width(forefoot)
+        mw = self._get_max_width(midfoot)
+        hw = self._get_max_width(heel)
+        
+        if hw == 0 or fw == 0:
+            raise ValueError("ไม่สามารถวัดความกว้าง - ภาพไม่สมบูรณ์")
+        
+        staheli = mw / hw
+        chippaux = mw / fw
+        arch_type = self._classify_arch(staheli)
+        
+        logger.info(f"📊 Staheli={staheli:.3f}, Chippaux={chippaux:.3f}, Type={arch_type.value}")
         
         return {
-            "severity": sev, "severity_thai": sev_th, "score": round(final_score, 1),
-            "arch_type": arch_type,
-            "indicators": indicators,
-            "risk_factors": risk_factors,
-            "recommendations": self._generate_recommendations(sev, arch_type)
+            'staheli_index': float(staheli),
+            'chippaux_index': float(chippaux),
+            'forefoot_width_px': int(fw),
+            'midfoot_width_px': int(mw),
+            'heel_width_px': int(hw),
+            'arch_type': arch_type
         }
-
-    def _generate_recommendations(self, severity, arch_type):
-        recs = ["ควรสวมรองเท้าที่เหมาะสม"]
-        if arch_type == "flat": recs.append("ใช้รองเท้าที่มี Arch Support")
-        elif arch_type == "high": recs.append("ใช้รองเท้าที่รับแรงกระแทกได้ดี (Cushioning)")
-        if severity == "high": recs.append("ควรพบแพทย์เพื่อตรวจวินิจฉัยเพิ่มเติม")
+    
+    def _get_max_width(self, region: np.ndarray) -> int:
+        max_w = 0
+        for row in region:
+            whites = np.where(row == 255)
+            if len(whites) > 0:
+                max_w = max(max_w, whites[-1] - whites)
+        return max_w
+    
+    def _classify_arch(self, si: float) -> ArchType:
+        if si < 0.0:
+            return ArchType.SEVERE_HIGH
+        elif si < 0.45:
+            return ArchType.HIGH
+        elif si <= 1.05:
+            return ArchType.NORMAL
+        return ArchType.FLAT
+    
+    def _detect_side(self, contour: np.ndarray, width: int) -> str:
+        M = cv2.moments(contour)
+        if M["m00"] == 0:
+            return "unknown"
+        cx = int(M["m10"] / M["m00"])
+        return "left" if cx < width // 2 else "right"
+    
+    def _calc_confidence(self, arch_data: Dict, rotation: float) -> float:
+        conf = 0.85
+        if abs(rotation) > 30:
+            conf -= 0.15
+        elif abs(rotation) > 15:
+            conf -= 0.05
+        if arch_data['midfoot_width_px'] < 10:
+            conf -= 0.20
+        si = arch_data['staheli_index']
+        if 0.4 < si < 0.5 or 1.0 < si < 1.1:
+            conf -= 0.10
+        return max(0.4, min(1.0, conf))
+    
+    # ==================== MAIN API ====================
+    
+    def analyze_foot_structure(self, images: List[bytes]) -> Dict[str, Any]:
+        """Main analysis (API compatible)"""
+        logger.info(f"🔬 Analyzing {len(images)} images")
+        
+        if not images:
+            raise ValueError("No images")
+        
+        try:
+            # Load
+            nparr = np.frombuffer(images, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                raise ValueError("Cannot read image")
+            
+            # Process
+            img_proc, binary = self._preprocess_image(img)
+            contour = self._find_foot_contour(binary, img_proc.shape[:2])
+            img_align, rot = self._align_foot_upright(img_proc, contour)
+            
+            # Re-segment
+            _, bin2 = self._preprocess_image(img_align)
+            cont2 = self._find_foot_contour(bin2, img_align.shape[:2])
+            
+            # Mask
+            mask = np.zeros_like(bin2)
+            cv2.drawContours(mask, [cont2], -1, 255, -1)
+            
+            # Calculate
+            arch = self._calculate_arch_indices(mask)
+            side = self._detect_side(cont2, img_align.shape)
+            conf = self._calc_confidence(arch, rot)
+            
+            # Response
+            return {
+                'arch_type': arch['arch_type'].value,
+                'detected_side': side,
+                'arch_height_ratio': arch['staheli_index'],  # Legacy
+                'staheli_index': arch['staheli_index'],
+                'chippaux_index': arch['chippaux_index'],
+                'heel_alignment': 'neutral',
+                'foot_length_cm': 0.0,
+                'foot_width_cm': 0.0,
+                'pressure_points': self._pressure(arch['arch_type']),
+                'flexibility_score': self._flexibility(arch['arch_type']),
+                'confidence': conf,
+                'measurements': {
+                    'forefoot_width_px': arch['forefoot_width_px'],
+                    'midfoot_width_px': arch['midfoot_width_px'],
+                    'heel_width_px': arch['heel_width_px'],
+                    'rotation_degrees': float(rot)
+                },
+                'method': 'Staheli_Validated_v2.0',
+                'timestamp': datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"❌ {e}")
+            raise ValueError(f"Analysis failed: {e}")
+    
+    def _pressure(self, arch: ArchType) -> Dict[str, float]:
+        p = {
+            ArchType.FLAT: {"heel": 0.6, "arch": 0.8, "ball": 0.6, "toes": 0.4},
+            ArchType.HIGH: {"heel": 0.8, "arch": 0.1, "ball": 0.6, "toes": 0.4},
+            ArchType.SEVERE_HIGH: {"heel": 0.9, "arch": 0.05, "ball": 0.7, "toes": 0.3},
+            ArchType.NORMAL: {"heel": 0.5, "arch": 0.4, "ball": 0.6, "toes": 0.5}
+        }
+        return p.get(arch, p[ArchType.NORMAL])
+    
+    def _flexibility(self, arch: ArchType) -> float:
+        return {
+            ArchType.FLAT: 0.4,
+            ArchType.HIGH: 0.3,
+            ArchType.SEVERE_HIGH: 0.2,
+            ArchType.NORMAL: 0.6
+        }.get(arch, 0.5)
+    
+    def assess_plantar_fasciitis(self, foot: Dict, quiz: float = 0, bmi: float = 0) -> Dict:
+        """PF Assessment (backward compatible)"""
+        arch_type = foot['arch_type']
+        
+        if 'flat' in arch_type:
+            risk = 25
+        elif 'high' in arch_type:
+            risk = 20
+        else:
+            risk = 5
+        
+        total = risk + quiz + (bmi * 5)
+        score = min(100, total)
+        
+        if score < 30:
+            sev, sev_th = "low", "ต่ำ"
+        elif score < 60:
+            sev, sev_th = "medium", "ปานกลาง"
+        else:
+            sev, sev_th = "high", "สูง"
+        
+        factors = []
+        if bmi >= 2:
+            factors.append("BMI สูง")
+        if 'flat' in arch_type:
+            factors.append("เท้าแบน")
+        if 'high' in arch_type:
+            factors.append("อุ้งเท้าสูง")
+        
+        return {
+            'severity': sev,
+            'severity_thai': sev_th,
+            'score': round(score, 1),
+            'arch_type': arch_type,
+            'indicators': {
+                'scan_score': foot.get('staheli_index', 0),
+                'quiz_score': quiz,
+                'bmi_score': bmi,
+                'arch_risk': risk
+            },
+            'risk_factors': factors,
+            'recommendations': self._recommendations(sev, arch_type)
+        }
+    
+    def _recommendations(self, sev: str, arch: str) -> List[str]:
+        recs = []
+        if 'flat' in arch:
+            recs.append("ใช้รองเท้า Arch Support")
+        elif 'high' in arch:
+            recs.append("ใช้รองเท้า Cushioning")
+        recs.append("ยืดเหยียด Plantar Fascia")
+        if sev == "high":
+            recs.append("⚠️ ควรพบแพทย์")
         return recs
     
 # import httpx

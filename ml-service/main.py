@@ -106,8 +106,8 @@ app.add_middleware(
 class ProcessRequest(BaseModel):
     scan_id: str
     image_urls: List[str] = Field(..., min_items=1)
-    questionnaire_score: float = 0.0
-    bmi_score: int = 0
+    questionnaire_score: float = Field(0.0, ge=0.0, le=100.0)  # ✅ เพิ่ม validation
+    bmi_score: float = Field(0.0, ge=0.0, le=5.0)  # ✅ เพิ่ม validation
 
 class ProcessResponse(BaseModel):
     success: bool
@@ -158,46 +158,97 @@ async def health_check():
     )
 
 @app.post("/process", response_model=ProcessResponse)
-async def process_scan(
-    request: ProcessRequest,
-    background_tasks: BackgroundTasks
-):
-    """ประมวลผลรูปเท้าและประเมินอาการรองช้ำ"""
+async def process_scan(request: ProcessRequest, background_tasks: BackgroundTasks):
+    """
+    Process foot scan with validated Staheli's Arch Index
+    
+    - Uses evidence-based methodology
+    - Returns comprehensive PF risk assessment
+    """
     try:
-        scan_id = request.scan_id
-        image_urls = request.image_urls
+        logger.info(f"📥 Processing scan: {request.scan_id}")
         
-        logger.info(f"🔄 Received PF assessment request: {scan_id}")
-        
-        # Validate scan exists
-        scan = await storage.get_scan(scan_id)
-        if not scan:
-            raise HTTPException(status_code=404, detail="Scan not found")
-        
-        # Queue background task
-        background_tasks.add_task(
-            process_pf_assessment,
+        # 1. Update status to processing
+        await storage.update_scan_status(
             request.scan_id,
-            request.image_urls,
-            request.questionnaire_score,
-            request.bmi_score
+            status="processing"
         )
         
-        logger.info(f"✅ Scan {scan_id} queued for PF assessment")
+        # 2. Download images
+        images = await analyzer.download_images(request.image_urls)
+        
+        # 3. Analyze foot structure (✅ ใช้ Staheli's method)
+        foot_analysis = analyzer.analyze_foot_structure(images)
+        
+        logger.info(f"📊 Foot Analysis Results:")
+        logger.info(f"   - Arch Type: {foot_analysis['arch_type']}")
+        logger.info(f"   - Staheli Index: {foot_analysis['staheli_index']:.3f}")  # ✅ แสดง Staheli
+        logger.info(f"   - Confidence: {foot_analysis['confidence']:.2f}")
+        
+        # 4. Assess PF risk
+        pf_assessment = analyzer.assess_plantar_fasciitis(
+            foot_analysis,
+            questionnaire_score=request.questionnaire_score,
+            bmi_score=request.bmi_score
+        )
+        
+        logger.info(f"🏥 PF Assessment:")
+        logger.info(f"   - Severity: {pf_assessment['severity_thai']}")
+        logger.info(f"   - Risk Score: {pf_assessment['score']:.1f}/100")
+        
+        # 5. Get recommendations
+        exercises = exercise_recommender.get_exercises(
+            arch_type=foot_analysis['arch_type'],
+            severity=pf_assessment['severity']
+        )
+        
+        shoes = await shoe_matcher.find_matching_shoes(
+            arch_type=foot_analysis['arch_type'],
+            severity=pf_assessment['severity']
+        )
+        
+        # 6. Save to Supabase
+        await storage.update_scan_analysis(
+            scan_id=request.scan_id,
+            foot_analysis=foot_analysis,
+            pf_assessment=pf_assessment,
+            exercises=exercises,
+            shoes=shoes,
+            foot_side=foot_analysis.get('detected_side')  # ✅ เพิ่ม foot_side
+        )
+        
+        await storage.update_scan_status(
+            request.scan_id,
+            status="completed"
+        )
+        
+        logger.info(f"✅ Scan {request.scan_id} processed successfully")
         
         return ProcessResponse(
             success=True,
-            scan_id=scan_id,
-            pf_severity="processing",
-            pf_score=0.0,
-            message="Assessment started in background"
+            scan_id=request.scan_id,
+            pf_severity=pf_assessment['severity'],
+            pf_score=pf_assessment['score'],
+            message="Analysis completed successfully"
         )
         
-    except HTTPException:
-        raise
+    except ValueError as e:
+        logger.error(f"❌ Validation error: {e}")
+        await storage.update_scan_status(
+            request.scan_id,
+            status="failed",
+            error_message=str(e)
+        )
+        raise HTTPException(status_code=400, detail=str(e))
+        
     except Exception as e:
-        logger.error(f"❌ Error queuing scan: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Processing error: {e}", exc_info=True)
+        await storage.update_scan_status(
+            request.scan_id,
+            status="failed",
+            error_message="Internal processing error"
+        )
+        raise HTTPException(status_code=500, detail="Processing failed")
 
 # ===== Background Processing =====
 
