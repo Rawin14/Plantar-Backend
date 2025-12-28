@@ -1,18 +1,16 @@
 """
-main.py - ปรับปรุง Error Handling
+Plantar ML Service
+ประมวลผลรูปเท้าและประเมินอาการรองช้ำ (Plantar Fasciitis)
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, status
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager  # 👈 เพิ่มบรรทัดนี้
 import os
 from datetime import datetime
 import logging
-import traceback
 from dotenv import load_dotenv
 
 # Import services
@@ -22,67 +20,77 @@ from services.matcher import PFShoeMatcher
 from services.storage import SupabaseStorage
 from services.processor import ImageProcessor
 
+# ===== Load Environment =====
 load_dotenv()
 
-# ===== Logging =====
+# ===== Configuration =====
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# ===== Configuration =====
+print("🔍 Checking environment variables...")
+print(f"SUPABASE_URL: {'✅ Found' if os.getenv('SUPABASE_URL') else '❌ Missing'}")
+print(f"SUPABASE_KEY: {'✅ Found' if os.getenv('SUPABASE_KEY') else '❌ Missing'}")
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY")
+    raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY")
 
-# ===== Global Services =====
+print("✅ Environment variables loaded!")
+
+# Initialize services (will be set in lifespan)
 storage = None
 analyzer = None
 exercise_recommender = None
 shoe_matcher = None
 processor = None
 
-# ===== Lifespan =====
+# ===== Lifespan Context Manager (แทน on_event) =====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Lifespan event handler
+    - Startup: initialize services
+    - Shutdown: cleanup
+    """
+    # ===== Startup =====
     global storage, analyzer, exercise_recommender, shoe_matcher, processor
     
-    logger.info("🚀 Starting Plantar ML Service v2.0")
+    logger.info("🚀 Plantar Fasciitis Analysis Service starting...")
     
-    try:
-        # Initialize services
-        storage = SupabaseStorage(SUPABASE_URL, SUPABASE_KEY)
-        analyzer = PlantarFasciitisAnalyzer()
-        exercise_recommender = ExerciseRecommender()
-        shoe_matcher = PFShoeMatcher(storage)
-        processor = ImageProcessor()
-        
-        # Check connection
-        is_connected = await storage.check_connection()
-        if is_connected:
-            logger.info("✅ Supabase connected")
-        else:
-            logger.warning("⚠️ Supabase connection failed")
-        
-        logger.info("✅ ML Service ready (Staheli's Method)")
-        
-    except Exception as e:
-        logger.error(f"❌ Startup failed: {e}", exc_info=True)
-        raise
+    # Initialize services
+    storage = SupabaseStorage(SUPABASE_URL, SUPABASE_KEY)
+    analyzer = PlantarFasciitisAnalyzer()
+    exercise_recommender = ExerciseRecommender()
+    shoe_matcher = PFShoeMatcher(storage)
+    processor = ImageProcessor()
     
+    # Check Supabase connection
+    is_connected = await storage.check_connection()
+    if is_connected:
+        logger.info("✅ Supabase connected")
+    else:
+        logger.warning("⚠️ Supabase connection failed")
+    
+    logger.info("✅ ML Service ready")
+    
+    # Yield control to the application
     yield
     
-    logger.info("🛑 Shutting down ML Service")
+    # ===== Shutdown =====
+    logger.info("👋 Service shutting down...")
+    # Cleanup if needed
 
 # ===== FastAPI App =====
 app = FastAPI(
     title="Plantar ML Service",
-    description="Medical-Grade Plantar Fasciitis Analysis (Staheli's Method)",
+    description="Plantar Fasciitis Analysis & Assessment",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan  # 👈 เพิ่ม parameter นี้
 )
 
 app.add_middleware(
@@ -92,49 +100,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ===== Custom Exception Handlers =====
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc):
-    """Handle Pydantic validation errors"""
-    logger.error(f"Validation error: {exc}")
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={
-            "success": False,
-            "error": "Invalid request data",
-            "details": str(exc),
-            "type": "validation_error"
-        }
-    )
-
-@app.exception_handler(ValueError)
-async def value_error_handler(request, exc):
-    """Handle ValueError (business logic errors)"""
-    logger.error(f"ValueError: {exc}")
-    return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={
-            "success": False,
-            "error": str(exc),
-            "type": "business_error"
-        }
-    )
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """Handle unexpected errors"""
-    logger.error(f"Unexpected error: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "success": False,
-            "error": "Internal server error",
-            "type": "server_error",
-            "details": str(exc) if os.getenv("DEBUG") == "true" else None
-        }
-    )
 
 # ===== Models =====
 
@@ -172,130 +137,40 @@ class HealthResponse(BaseModel):
     timestamp: str
     supabase_connected: bool
     version: str
-    method: str
-
-# ===== Background Task =====
-
-async def process_pf_assessment(
-    scan_id: str,
-    image_urls: List[str],
-    questionnaire_score: float,
-    bmi_score: float,
-    age: int,              # ✅ เพิ่ม
-    activity_level: str    # ✅ เพิ่ม
-):
-    """Background task for PF assessment"""
-    try:
-        logger.info(f"🔄 Starting background processing: {scan_id}")
-        
-        # 1. Update status
-        await storage.update_scan_status(scan_id, status="processing")
-        
-        # 2. Download images
-        try:
-            images = await processor.download_images(image_urls)
-            
-            # ✅ เพิ่ม debug logging
-            logger.info(f"📊 Downloaded images type: {type(images)}")
-            logger.info(f"📊 Number of images: {len(images)}")
-            if images:
-                logger.info(f"📊 First image type: {type(images)}")
-                logger.info(f"📊 First image size: {len(images)} bytes")
-            
-        except Exception as e:
-            raise ValueError(f"ไม่สามารถดาวน์โหลดรูปภาพได้: {str(e)}")
-        
-        # 3. Analyze foot
-        try:
-            # ✅ ส่ง images (list of bytes) เข้าไปตรงๆ
-            foot_analysis = analyzer.analyze_foot_structure(images)
-            
-            logger.info(f"📊 Foot Analysis: {foot_analysis['arch_type']}, "
-                       f"Staheli={foot_analysis['staheli_index']:.3f}")
-            
-        except ValueError as e:
-            raise ValueError(f"การวิเคราะห์รูปเท้าล้มเหลว: {str(e)}")
-        except Exception as e:
-            raise Exception(f"เกิดข้อผิดพลาดในการประมวลผลภาพ: {str(e)}")
-        
-        # 4. Assess PF
-        pf_assessment = analyzer.assess_plantar_fasciitis(
-            foot_analysis,
-            questionnaire_score=questionnaire_score,
-            bmi_score=bmi_score,
-            age=age,                       # ✅ ส่งค่าอายุ
-            activity_level=activity_level  # ✅ ส่งค่ากิจกรรม
-        )
-        
-        logger.info(f"🏥 PF Assessment: {pf_assessment['severity_thai']}, "
-                   f"Score={pf_assessment['score']:.1f}")
-        
-        # 5. Get recommendations
-        exercises = exercise_recommender.get_exercises(
-            arch_type=foot_analysis['arch_type'],
-            severity=pf_assessment['severity']
-        )
-        
-        shoes = await shoe_matcher.find_matching_shoes(
-            arch_type=foot_analysis['arch_type'],
-            severity=pf_assessment['severity']
-        )
-        
-        # 6. Save results
-        await storage.update_scan_analysis(
-            scan_id=scan_id,
-            foot_analysis=foot_analysis,
-            pf_assessment=pf_assessment,
-            exercises=exercises,
-            shoes=shoes,
-            foot_side=foot_analysis.get('detected_side')
-        )
-        
-        await storage.update_scan_status(scan_id, status="completed")
-        
-        logger.info(f"✅ Completed: {scan_id}")
-        
-    except ValueError as e:
-        logger.error(f"❌ Business error in {scan_id}: {e}")
-        await storage.update_scan_status(
-            scan_id,
-            status="failed",
-            error_message=str(e)
-        )        
-    except Exception as e:
-        logger.error(f"❌ Unexpected error in {scan_id}: {e}", exc_info=True)
-        await storage.update_scan_status(
-            scan_id,
-            status="failed",
-            error_message="เกิดข้อผิดพลาดภายในระบบ"
-        )
 
 # ===== Endpoints =====
 
-@app.get("/", response_model=HealthResponse)
+@app.get("/")
 async def root():
-    """Root endpoint"""
-    is_connected = await storage.check_connection() if storage else False
-    
-    return HealthResponse(
-        status="healthy",
-        timestamp=datetime.now().isoformat(),
-        supabase_connected=is_connected,
-        version="2.0.0",
-        method="Staheli_Validated"
-    )
+    return {
+        "service": "Plantar Fasciitis Analysis Service",
+        "version": "2.0.0",
+        "status": "running",
+        "capabilities": [
+            "Foot image analysis",
+            "Plantar fasciitis assessment",
+            "Exercise recommendations",
+            "Shoe recommendations"
+        ]
+    }
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint"""
-    is_connected = await storage.check_connection() if storage else False
+    if not storage:
+        return HealthResponse(
+            status="starting",
+            timestamp=datetime.utcnow().isoformat(),
+            supabase_connected=False,
+            version="2.0.0"
+        )
+    
+    supabase_ok = await storage.check_connection()
     
     return HealthResponse(
-        status="healthy" if is_connected else "degraded",
-        timestamp=datetime.now().isoformat(),
-        supabase_connected=is_connected,
-        version="2.0.0",
-        method="Staheli_Validated"
+        status="healthy" if supabase_ok else "degraded",
+        timestamp=datetime.utcnow().isoformat(),
+        supabase_connected=supabase_ok,
+        version="2.0.0"
     )
 
 @app.post("/process", response_model=ProcessResponse)
@@ -303,28 +178,17 @@ async def process_scan(
     request: ProcessRequest,
     background_tasks: BackgroundTasks
 ):
-    """
-    Process foot scan with Staheli's Arch Index
-    
-    - Validates input data
-    - Queues background processing
-    - Returns immediately with processing status
-    """
+    """ประมวลผลรูปเท้าและประเมินอาการรองช้ำ"""
     try:
         scan_id = request.scan_id
+        image_urls = request.image_urls
         
-        logger.info(f"📥 Received request: {scan_id}")
-        logger.info(f"   - Images: {len(request.image_urls)}")
-        logger.info(f"   - Quiz Score: {request.questionnaire_score}")
-        logger.info(f"   - BMI Score: {request.bmi_score}")
+        logger.info(f"🔄 Received PF assessment request: {scan_id}")
         
         # Validate scan exists
         scan = await storage.get_scan(scan_id)
         if not scan:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"ไม่พบ Scan ID: {scan_id}"
-            )
+            raise HTTPException(status_code=404, detail="Scan not found")
         
         # Queue background task
         background_tasks.add_task(
@@ -337,67 +201,114 @@ async def process_scan(
             request.activity_level   # ✅ ส่งค่า
         )
         
-        logger.info(f"✅ Queued: {scan_id}")
+        logger.info(f"✅ Scan {scan_id} queued for PF assessment")
         
         return ProcessResponse(
             success=True,
             scan_id=scan_id,
             pf_severity="processing",
             pf_score=0.0,
-            message="กำลังประมวลผล - ผลลัพธ์จะพร้อมในไม่กี่วินาที"
+            message="Assessment started in background"
         )
         
     except HTTPException:
         raise
-    except ValueError as e:
-        logger.error(f"Validation error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
     except Exception as e:
-        logger.error(f"Error queuing scan: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="ไม่สามารถเริ่มการประมวลผลได้"
-        )
+        logger.error(f"❌ Error queuing scan: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ===== Direct Analysis Endpoint (for testing) =====
+# ===== Background Processing =====
 
-@app.post("/analyze-direct")
-async def analyze_direct(request: ProcessRequest):
-    """
-    Direct analysis (synchronous) - for testing
-    ⚠️ ใช้สำหรับทดสอบเท่านั้น - อาจ timeout ในกรณีรูปใหญ่
-    """
+async def process_pf_assessment(
+    scan_id: str,
+    image_urls: List[str],
+    questionnaire_score: float,
+    bmi_score: float,
+    age: int,              # ✅ รับค่า
+    activity_level: str    # ✅ รับค่า
+):
+    """Background task: ประมวลผลและประเมินอาการรองช้ำ"""
     try:
-        logger.info(f"🧪 Direct analysis: {request.scan_id}")
+        logger.info(f"🔄 Starting PF assessment for {scan_id}")
         
-        # Download images
-        images = await analyzer.download_images(request.image_urls)
+        # 0. Update Status to processing
+        await storage.update_scan_status(scan_id, status="processing")
         
-        # Analyze
+        # 1. Download images
+        logger.info(f"📥 Downloading {len(image_urls)} images...")
+        images = await analyzer.download_images(image_urls)
+        logger.info(f"✅ Downloaded {len(images)} images")
+        
+        # 2. Analyze foot structure
+        logger.info(f"🔍 Analyzing foot structure...")
         foot_analysis = analyzer.analyze_foot_structure(images)
+        logger.info(f"✅ Analysis: arch={foot_analysis['arch_type']}")
         
-        # Assess PF
+        # 3. Generate 3D Model (ถ้ามี)
+        real_model_url = None
+        try:
+            model_data = processor.generate_3d_model(images)
+            if model_data:
+                logger.info("📤 Uploading generated 3D model...")
+                real_model_url = await storage.upload_model_file(scan_id, model_data)
+        except Exception as e:
+            logger.warning(f"⚠️ 3D Model generation failed (skipping): {e}")
+
+        # 4. Assess Plantar Fasciitis (Medical-Grade Calculation)
+        # ✅ เรียกครั้งเดียว ส่งค่าครบถ้วน
+        logger.info(f"🏥 Assessing PF Risk (Quiz: {questionnaire_score}, BMI: {bmi_score}, Age: {age})")
+        
         pf_assessment = analyzer.assess_plantar_fasciitis(
             foot_analysis,
-            request.questionnaire_score,
-            request.bmi_score
+            questionnaire_score=questionnaire_score,
+            bmi_score=bmi_score,
+            age=age,                       # ✅ ส่งค่าอายุ
+            activity_level=activity_level  # ✅ ส่งค่ากิจกรรม
         )
         
-        return {
-            "success": True,
-            "scan_id": request.scan_id,
-            "foot_analysis": foot_analysis,
-            "pf_assessment": pf_assessment
-        }
+        logger.info(f"✅ PF Result: {pf_assessment['severity']} (Score: {pf_assessment['score']})")
         
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # 5. Get Recommendations (Exercises & Shoes)
+        exercises = exercise_recommender.get_recommendations(pf_assessment)
+        
+        # (ถ้ามี Shoe Matcher)
+        shoes = []
+        if shoe_matcher:
+             shoes = await shoe_matcher.find_matching_shoes(
+                arch_type=foot_analysis['arch_type'],
+                severity=pf_assessment['severity']
+            )
+
+        # 6. Save ALL Results & Update Status (สำคัญมาก!) 💾
+        await storage.update_scan_analysis(
+            scan_id=scan_id,
+            foot_analysis=foot_analysis,
+            pf_assessment=pf_assessment,
+            exercises=exercises,
+            shoes=shoes,
+            foot_side=foot_analysis.get('detected_side'),
+            model_url=real_model_url  # ส่ง URL 3D Model ไปบันทึกด้วย
+        )
+        
+        # 7. Mark as Completed
+        await storage.update_scan_status(scan_id, status="completed")
+        
+        logger.info(f"✅ PF assessment completed successfully for {scan_id}")
+        
     except Exception as e:
-        logger.error(f"Analysis error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Error in PF assessment {scan_id}: {e}", exc_info=True)
+        
+        # Update status to failed
+        try:
+            await storage.update_scan_status(
+                scan_id,
+                status="failed",
+                error_message=str(e)
+            )
+        except:
+            pass
+        
+        raise
 
 # ===== Run Server =====
 if __name__ == "__main__":

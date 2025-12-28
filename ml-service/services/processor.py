@@ -5,7 +5,7 @@ Image Processing Service
 
 import httpx
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,79 +17,41 @@ class ImageProcessor:
         self.timeout = httpx.Timeout(30.0)
     
     async def download_images(self, urls: List[str]) -> List[bytes]:
-        """Download images with validation"""
-        if not urls:
-            raise ValueError("ไม่มี URL ของรูปภาพ")
-        
+        """
+        ดาวน์โหลดรูปภาพจาก URLs
+        """
         images = []
-        errors = []
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            tasks = [self._download_single(client, url, i+1) for i, url in enumerate(urls)]
+            tasks = [self._download_single(client, url) for url in urls]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    error_msg = f"รูปที่ {i+1}: {str(result)}"
-                    errors.append(error_msg)
-                    logger.error(f"❌ {error_msg}")
-                elif result is not None:
-                    # Validate type
-                    if isinstance(result, bytes):
-                        images.append(result)
-                        logger.info(f"✅ Image {i+1}: {len(result)} bytes")
-                    else:
-                        error_msg = f"รูปที่ {i+1}: type ไม่ถูกต้อง ({type(result)})"
-                        errors.append(error_msg)
-                        logger.error(f"❌ {error_msg}")
+                    logger.warning(f"⚠️ Failed to download image {i+1}: {result}")
+                    continue
+                
+                if result:
+                    images.append(result)
         
         if not images:
-            error_detail = "\n".join(errors) if errors else "ไม่ทราบสาเหตุ"
-            raise ValueError(f"ไม่สามารถดาวน์โหลดรูปภาพได้:\n{error_detail}")
+            raise ValueError("No images downloaded successfully")
         
-        logger.info(f"📊 Downloaded: {len(images)}/{len(urls)} images")
         return images
     
     async def _download_single(
         self, 
         client: httpx.AsyncClient, 
-        url: str,
-        index: int
-    ) -> Optional[bytes]:
-        """Download single image with retry"""
-        retries = 3
-        last_error = None
-        
-        for attempt in range(retries):
-            try:
-                logger.info(f"📥 Downloading image {index} (attempt {attempt+1}/{retries})")
-                
-                resp = await client.get(url, follow_redirects=True)
-                resp.raise_for_status()
-                
-                # Validate content type
-                content_type = resp.headers.get('content-type', '')
-                if not content_type.startswith('image/'):
-                    raise ValueError(f"ไม่ใช่รูปภาพ (type: {content_type})")
-                
-                # Validate size
-                content = resp.content
-                if len(content) < 1000:
-                    raise ValueError("ไฟล์เล็กเกินไป")
-                if len(content) > 10 * 1024 * 1024:
-                    raise ValueError("ไฟล์ใหญ่เกินไป (>10MB)")
-                
-                logger.info(f"✅ Downloaded image {index}: {len(content)} bytes")
-                return content  # ✅ Return bytes directly
-                
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(f"⚠️ Attempt {attempt+1} failed: {last_error}")
-                if attempt < retries - 1:
-                    await asyncio.sleep(2 ** attempt)
-        
-        raise Exception(f"Failed after {retries} attempts: {last_error}")
-    
+        url: str
+    ) -> bytes:
+        """ดาวน์โหลดรูปเดียว"""
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.content
+        except Exception as e:
+            logger.error(f"Failed to download {url}: {e}")
+            return None
     
     def generate_3d_model(self, images: List[bytes]) -> Dict[str, Any]:
         """
