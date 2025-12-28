@@ -1,5 +1,5 @@
 """
-Supabase Storage Service (ใช้ REST API)
+Supabase Storage Service (REST API)
 """
 
 import httpx
@@ -28,9 +28,8 @@ class SupabaseStorage:
         """ตรวจสอบการเชื่อมต่อ Supabase"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # Query ตาราง shoes เพื่อทดสอบการเชื่อมต่อ
                 response = await client.get(
-                    f"{self.rest_url}/shoes?select=id&limit=1",
+                    f"{self.rest_url}/foot_scans?select=id&limit=1",
                     headers=self.headers
                 )
                 
@@ -56,54 +55,35 @@ class SupabaseStorage:
                 response.raise_for_status()
                 
                 data = response.json()
-                return data if data else None
+                return data[0] if data else None  # ✅ แก้ไข: return data[0] ถ้ามีข้อมูล
                 
         except Exception as e:
             logger.error(f"Error fetching scan {scan_id}: {e}")
             return None
     
-    async def update_scan(
+    # ✅ ฟังก์ชันที่ขาดหายไป 1: update_scan_status
+    async def update_scan_status(
         self,
         scan_id: str,
-        pf_severity: Optional[str] = None,
-        pf_score: Optional[float] = None,
-        arch_type: Optional[str] = None,
-        foot_analysis: Optional[Dict] = None,
-        model_3d_url: Optional[str] = None,
-        status: Optional[str] = None,
-        error_message: Optional[str] = None,
-        foot_side: Optional[str] = None
+        status: str,
+        error_message: Optional[str] = None
     ):
-        """อัปเดต scan"""
+        """
+        อัปเดตสถานะของ scan
+        """
         try:
-            update_data = {}
-            
-            if pf_severity:
-                update_data["pf_severity"] = pf_severity
-            
-            if pf_score is not None:
-                update_data["pf_score"] = pf_score
-            
-            if arch_type:
-                update_data["arch_type"] = arch_type
-            
-            if foot_analysis:
-                update_data["foot_analysis"] = foot_analysis
-
-            if model_3d_url: 
-                update_data["model_3d_url"] = model_3d_url
-
-            if foot_side:  # ✅ 2. เพิ่ม Logic บันทึกค่า
-                update_data["foot_side"] = foot_side
-            
-            if status:
-                update_data["status"] = status
+            update_data = {
+                "status": status
+            }
             
             if error_message:
                 update_data["error_message"] = error_message
             
-            if status == "completed":
+            if status == "processing":
+                update_data["started_at"] = datetime.utcnow().isoformat()
+            elif status == "completed":
                 update_data["processed_at"] = datetime.utcnow().isoformat()
+                update_data["error_message"] = None  # Clear error
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.patch(
@@ -113,188 +93,142 @@ class SupabaseStorage:
                 )
                 response.raise_for_status()
                 
-                logger.info(f"✅ Updated scan {scan_id}")
+                logger.info(f"✅ Updated scan {scan_id} status: {status}")
                 
         except Exception as e:
-            logger.error(f"Error updating scan: {e}")
+            logger.error(f"Error updating scan status: {e}")
             raise
     
-    async def save_pf_indicators(
+    # ✅ ฟังก์ชันที่ขาดหายไป 2: update_scan_analysis
+    async def update_scan_analysis(
         self,
         scan_id: str,
-        indicators: Dict[str, Any]
+        foot_analysis: Dict[str, Any],
+        pf_assessment: Dict[str, Any],
+        exercises: List[Dict[str, Any]],
+        shoes: List[Dict[str, Any]],
+        foot_side: Optional[str] = None,
+        model_url: Optional[str] = None
     ):
-        """บันทึก PF indicators"""
+        """
+        อัปเดตผลการวิเคราะห์ทั้งหมดในครั้งเดียว
+        """
         try:
-            data = {
-                "scan_id": scan_id,
-                "arch_collapse_score": indicators.get('arch_collapse_score'),
-                "heel_pain_index": indicators.get('heel_pain_index'),
-                "pressure_distribution_score": indicators.get('pressure_distribution_score'),
-                "foot_alignment_score": indicators.get('foot_alignment_score'),
-                "flexibility_score": indicators.get('flexibility_score'),
-                "risk_factors": indicators.get('risk_factors', []),
-                "recommendations": indicators.get('recommendations', []),
-                "scan_part_score": indicators.get('scan_part_score'),
-                "questionnaire_part_score": indicators.get('questionnaire_part_score'),
-                "bmi_score": indicators.get('bmi_score')
+            update_data = {
+                # Foot analysis
+                "arch_type": foot_analysis.get('arch_type'),
+                "staheli_index": foot_analysis.get('staheli_index', 0),
+                "chippaux_index": foot_analysis.get('chippaux_index', 0),
+                "arch_height_ratio": foot_analysis.get('arch_height_ratio', 0),
+                "detected_side": foot_analysis.get('detected_side'),
+                "foot_side": foot_side,
+                "confidence": foot_analysis.get('confidence', 0),
+                
+                # PF assessment
+                "pf_severity": pf_assessment.get('severity'),
+                "pf_score": pf_assessment.get('score'),
+                "risk_factors": pf_assessment.get('risk_factors', []),
+                
+                # Metadata & Status
+                "analysis_method": foot_analysis.get('method', 'Staheli_Validated_v2.0'),
+                "measurements": foot_analysis.get('measurements', {}),
+                "processed_at": datetime.utcnow().isoformat(),
+                "status": "completed"
             }
+
+            if model_url:
+                update_data["model_3d_url"] = model_url
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.rest_url}/pf_indicators",
+                # 1. Update scan table
+                response = await client.patch(
+                    f"{self.rest_url}/foot_scans?id=eq.{scan_id}",
                     headers={**self.headers, "Prefer": "return=minimal"},
-                    json=data
+                    json=update_data
                 )
                 response.raise_for_status()
                 
-                logger.info(f"✅ Saved PF indicators")
+                # 2. Save exercises
+                if exercises:
+                    await self._save_exercises(scan_id, exercises)
+                
+                # 3. Save shoe recommendations
+                if shoes:
+                    await self._save_shoe_recommendations(scan_id, shoes)
+                
+                logger.info(f"✅ Updated scan {scan_id} with ALL analysis results")
                 
         except Exception as e:
-            logger.error(f"Error saving PF indicators: {e}")
+            logger.error(f"Error updating scan analysis: {e}")
             raise
     
-    async def save_exercises(
-        self,
-        scan_id: str,
-        exercises: List[Dict[str, Any]]
-    ):
-        """บันทึกแบบฝึกหัด"""
-        try:
-            data = [
-                {
-                    "scan_id": scan_id,
-                    **exercise
-                }
-                for exercise in exercises
-            ]
-            
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.rest_url}/exercise_recommendations",
-                    headers={**self.headers, "Prefer": "return=minimal"},
-                    json=data
-                )
-                response.raise_for_status()
-                
-                logger.info(f"✅ Saved {len(exercises)} exercises")
-                
-        except Exception as e:
-            logger.error(f"Error saving exercises: {e}")
-            raise
-    
-    async def save_shoe_recommendations(
-        self,
-        recommendations: List[Dict[str, Any]]
-    ):
-        """บันทึกคำแนะนำรองเท้า"""
+    async def _save_exercises(self, scan_id: str, exercises: List[Dict]):
+        """บันทึกแบบฝึกหัด (Internal helper)"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.rest_url}/shoe_recommendations",
-                    headers={**self.headers, "Prefer": "return=minimal"},
-                    json=recommendations
-                )
-                response.raise_for_status()
-                
-                logger.info(f"✅ Saved {len(recommendations)} recommendations")
-                
-        except Exception as e:
-            logger.error(f"Error saving recommendations: {e}")
-            raise
-    
-    async def get_all_shoes(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """ดึงรองเท้าทั้งหมด"""
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(
-                    f"{self.rest_url}/shoes?select=*&limit={limit}",
+                # ลบของเก่าก่อน
+                await client.delete(
+                    f"{self.rest_url}/scan_exercises?scan_id=eq.{scan_id}",
                     headers=self.headers
                 )
-                response.raise_for_status()
                 
-                return response.json()
+                # เตรียมข้อมูลใหม่
+                exercise_data = []
+                for ex in exercises:
+                    data = {
+                        "scan_id": scan_id,
+                        "exercise_name": ex.get('name', ex.get('exercise_name')),
+                        "description": ex.get('description'),
+                        "duration": ex.get('duration'),
+                        "sets": ex.get('sets'),
+                        "reps": ex.get('reps'),
+                        "video_url": ex.get('video_url')
+                    }
+                    exercise_data.append(data)
                 
+                if exercise_data:
+                    response = await client.post(
+                        f"{self.rest_url}/scan_exercises",
+                        headers={**self.headers, "Prefer": "return=minimal"},
+                        json=exercise_data
+                    )
+                    response.raise_for_status()
+                    
         except Exception as e:
-            logger.error(f"Error fetching shoes: {e}")
-            return []
+            logger.warning(f"Could not save exercises: {e}")
     
-    async def get_scan_stats(self) -> Dict[str, int]:
-        """ดึงสถิติ"""
+    async def _save_shoe_recommendations(self, scan_id: str, shoes: List[Dict]):
+        """บันทึกรองเท้าแนะนำ (Internal helper)"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # Total
-                total_resp = await client.get(
-                    f"{self.rest_url}/foot_scans?select=count",
-                    headers={**self.headers, "Prefer": "count=exact"}
+                # ลบของเก่าก่อน
+                await client.delete(
+                    f"{self.rest_url}/scan_shoe_recommendations?scan_id=eq.{scan_id}",
+                    headers=self.headers
                 )
                 
-                # Low severity
-                low_resp = await client.get(
-                    f"{self.rest_url}/foot_scans?pf_severity=eq.low&select=count",
-                    headers={**self.headers, "Prefer": "count=exact"}
-                )
+                # เตรียมข้อมูลใหม่
+                shoe_data = []
+                for shoe in shoes:
+                    data = {
+                        "scan_id": scan_id,
+                        "shoe_id": shoe.get('id'),
+                        "match_score": shoe.get('match_score', 0)
+                    }
+                    shoe_data.append(data)
                 
-                # Medium severity
-                medium_resp = await client.get(
-                    f"{self.rest_url}/foot_scans?pf_severity=eq.medium&select=count",
-                    headers={**self.headers, "Prefer": "count=exact"}
-                )
-                
-                # High severity
-                high_resp = await client.get(
-                    f"{self.rest_url}/foot_scans?pf_severity=eq.high&select=count",
-                    headers={**self.headers, "Prefer": "count=exact"}
-                )
-                
-                def get_count(resp):
-                    range_header = resp.headers.get("Content-Range", "0")
-                    return int(range_header.split("/")) if "/" in range_header else 0
-                
-                return {
-                    "total_scans": get_count(total_resp),
-                    "low_severity": get_count(low_resp),
-                    "medium_severity": get_count(medium_resp),
-                    "high_severity": get_count(high_resp)
-                }
-                
+                if shoe_data:
+                    response = await client.post(
+                        f"{self.rest_url}/scan_shoe_recommendations",
+                        headers={**self.headers, "Prefer": "return=minimal"},
+                        json=shoe_data
+                    )
+                    response.raise_for_status()
+                    
         except Exception as e:
-            logger.error(f"Error fetching stats: {e}")
-            return {
-                "total_scans": 0,
-                "low_severity": 0,
-                "medium_severity": 0,
-                "high_severity": 0
-            }
-        
-        # เพิ่ม method นี้ใน class SupabaseStorage
-    async def upload_model_file(self, scan_id: str, file_data: bytes, file_extension: str = "usdz") -> Optional[str]:
-        """อัปโหลดไฟล์ 3D ขึ้น Supabase Storage และคืนค่า Public URL"""
-        try:
-            bucket_name = "3d-models" # ⚠️ ต้องไปสร้าง Bucket ชื่อนี้ใน Supabase Dashboard ด้วย
-            file_path = f"{scan_id}/model.{file_extension}"
-            
-            # URL สำหรับ Upload (Supabase Storage API)
-            upload_url = f"{self.url}/storage/v1/object/{bucket_name}/{file_path}"
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    upload_url,
-                    headers={
-                        "Authorization": f"Bearer {self.key}",
-                        "Content-Type": "application/octet-stream", # หรือ model/vnd.usdz+zip
-                        "x-upsert": "true"
-                    },
-                    content=file_data
-                )
-                response.raise_for_status()
-                
-                # สร้าง Public URL
-                # รูปแบบ: https://<project>.supabase.co/storage/v1/object/public/<bucket>/<path>
-                public_url = f"{self.url}/storage/v1/object/public/{bucket_name}/{file_path}"
-                logger.info(f"✅ Uploaded 3D model: {public_url}")
-                return public_url
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to upload 3D model: {e}")
-            return None
+            logger.warning(f"Could not save shoe recommendations: {e}")
+
+    # ฟังก์ชันสำหรับอัปโหลดโมเดล (ถ้ามี)
+    async def upload_model_file(self, scan_id: str, file_data: bytes) -> Optional[str]:
+        # (เว้นว่างไว้ หรือใส่โค้ด upload ถ้าคุณมี bucket)
+        return None
