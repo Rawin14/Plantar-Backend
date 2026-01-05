@@ -16,9 +16,8 @@ from dotenv import load_dotenv
 # Import services
 from services.pf_analyzer import PlantarFasciitisAnalyzer
 from services.exercise_recommender import ExerciseRecommender
-# ⚠️ ตรวจสอบชื่อ Class ในไฟล์ services/matcher.py ว่าชื่อ PFShoeMatcher หรือ ShoeMatcher
-# ถ้าเป็น ShoeMatcher ให้แก้เป็น: from services.matcher import ShoeMatcher
-from services.matcher import ShoeMatcher 
+# ✅ แก้ไข 1: Import PFShoeMatcher และเปลี่ยนชื่อเล่นเป็น ShoeMatcher เพื่อให้โค้ดด้านล่างไม่ต้องแก้เยอะ
+from services.matcher import PFShoeMatcher as ShoeMatcher
 from services.storage import SupabaseStorage
 from services.processor import ImageProcessor
 
@@ -33,13 +32,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # หรือ SUPABASE_SERVICE_ROLE_KEY
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     logger.error("❌ Missing Supabase credentials")
-    # ไม่ raise error ตรงนี้เพื่อให้ App พอจะรันขึ้นมา debug ได้ (แต่จะใช้งานไม่ได้)
 
-# Initialize services (Global variables)
+# Initialize services
 storage = None
 analyzer = None
 exercise_recommender = None
@@ -52,7 +50,6 @@ async def lifespan(app: FastAPI):
     """
     Lifespan event handler: Initialize & Cleanup
     """
-    # ===== Startup =====
     global storage, analyzer, exercise_recommender, shoe_matcher, processor
     
     logger.info("🚀 Plantar Fasciitis Analysis Service starting...")
@@ -63,7 +60,11 @@ async def lifespan(app: FastAPI):
     
     analyzer = PlantarFasciitisAnalyzer()
     exercise_recommender = ExerciseRecommender()
-    shoe_matcher = ShoeMatcher(storage) if storage else None
+    
+    # Initialize ShoeMatcher
+    if storage:
+        shoe_matcher = ShoeMatcher(storage)
+    
     processor = ImageProcessor()
     
     # Check Supabase connection
@@ -78,7 +79,6 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # ===== Shutdown =====
     logger.info("👋 Service shutting down...")
 
 # ===== FastAPI App =====
@@ -151,7 +151,6 @@ async def process_scan(request: ProcessRequest, background_tasks: BackgroundTask
         if not storage:
             raise HTTPException(status_code=503, detail="Storage service unavailable")
 
-        # Queue background task
         background_tasks.add_task(
             process_pf_assessment,
             request.scan_id,
@@ -204,21 +203,27 @@ async def process_pf_assessment(
             activity_level=activity_level
         )
         
-        # 4. Generate Recommendations (เปิดใช้งานถ้ามีไฟล์ครบ)
+        # 4. Generate Recommendations
         try:
             exercises = exercise_recommender.get_recommendations(pf_assessment)
         except:
             exercises = []
             
         try:
-            # shoes = await shoe_matcher.find_pf_shoes(pf_assessment) # ตัวอย่างการเรียก
-            shoes = [] 
-        except:
+            # ใช้งาน ShoeMatcher (PFShoeMatcher)
+            if shoe_matcher:
+                # ตรวจสอบว่าฟังก์ชัน find_pf_shoes เป็น async หรือไม่
+                # จากไฟล์ matcher.py ที่ส่งมาเป็น async def find_pf_shoes
+                shoes = await shoe_matcher.find_pf_shoes(scan_id, pf_assessment)
+            else:
+                shoes = []
+        except Exception as e:
+            logger.warning(f"Shoe matching failed: {e}")
             shoes = []
 
         # 5. Save ALL Results
-        # ฟังก์ชันนี้ใน storage.py จะอัปเดต status='completed' ให้เอง
         if storage:
+            # ✅ แก้ไข 2: ลบ model_url ออกจากการเรียกใช้
             await storage.update_scan_analysis(
                 scan_id=scan_id,
                 foot_analysis=foot_analysis,
@@ -226,7 +231,6 @@ async def process_pf_assessment(
                 exercises=exercises,
                 shoes=shoes,
                 foot_side=foot_analysis.get("detected_side")
-                # ❌ model_url ถูกลบออกแล้ว ไม่ต้องใส่
             )
         
         logger.info(f"✅ PF assessment completed successfully for {scan_id}")
