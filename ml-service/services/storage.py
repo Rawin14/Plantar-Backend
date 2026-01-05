@@ -1,11 +1,13 @@
 """
 Supabase Storage Service (REST API)
+Revised for robustness and schema compatibility
 """
 
 import httpx
 from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +23,7 @@ class SupabaseStorage:
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
         }
-        self.timeout = httpx.Timeout(10.0)
+        self.timeout = httpx.Timeout(10.0, connect=5.0, read=10.0)
         logger.info("✅ Supabase REST client initialized")
     
     async def check_connection(self) -> bool:
@@ -55,13 +57,12 @@ class SupabaseStorage:
                 response.raise_for_status()
                 
                 data = response.json()
-                return data[0] if data else None  # ✅ แก้ไข: return data[0] ถ้ามีข้อมูล
+                return data[0] if data else None
                 
         except Exception as e:
             logger.error(f"Error fetching scan {scan_id}: {e}")
             return None
     
-    # ✅ ฟังก์ชันที่ขาดหายไป 1: update_scan_status
     async def update_scan_status(
         self,
         scan_id: str,
@@ -97,9 +98,8 @@ class SupabaseStorage:
                 
         except Exception as e:
             logger.error(f"Error updating scan status: {e}")
-            raise
+            # ไม่ raise เพื่อให้ Flow ทำงานต่อได้ แต่ log error ไว้
     
-    # ✅ ฟังก์ชันที่ขาดหายไป 2: update_scan_analysis
     async def update_scan_analysis(
         self,
         scan_id: str,
@@ -107,52 +107,65 @@ class SupabaseStorage:
         pf_assessment: Dict[str, Any],
         exercises: List[Dict[str, Any]],
         shoes: List[Dict[str, Any]],
-        foot_side: Optional[str] = None,
-        model_url: Optional[str] = None
+        foot_side: Optional[str] = None
     ):
         """
-        อัปเดตผลการวิเคราะห์ทั้งหมดในครั้งเดียว
+        อัปเดตผลการวิเคราะห์ทั้งหมด
         """
         try:
-            update_data = {
-                # Foot analysis
-                "arch_type": foot_analysis.get('arch_type'),
-                "staheli_index": foot_analysis.get('staheli_index', 0),
-                "chippaux_index": foot_analysis.get('chippaux_index', 0),
-                "arch_height_ratio": foot_analysis.get('arch_height_ratio', 0),
-                "detected_side": foot_analysis.get('detected_side'),
-                "foot_side": foot_side,
-                "confidence": foot_analysis.get('confidence', 0),
-                
-                # PF assessment
-                "pf_severity": pf_assessment.get('severity'),
-                "pf_score": pf_assessment.get('score'),
+            # 1. เตรียมข้อมูลสำหรับ Analysis Result (JSONB)
+            # รวมข้อมูลละเอียดทั้งหมดไว้ใน JSON ก้อนเดียว เพื่อไม่ให้รก Table หลัก
+            full_analysis_data = {
+                "foot_analysis": foot_analysis,
                 "risk_factors": pf_assessment.get('risk_factors', []),
-                
-                # Metadata & Status
-                "analysis_method": foot_analysis.get('method', 'Staheli_Validated_v2.0'),
                 "measurements": foot_analysis.get('measurements', {}),
-                "processed_at": datetime.utcnow().isoformat(),
-                "status": "completed"
+                "foot_side": foot_side,
+                "detected_side": foot_analysis.get('detected_side'),
+                "confidence": foot_analysis.get('confidence', 0),
+                "indices": {
+                    "staheli": foot_analysis.get('staheli_index'),
+                    "chippaux": foot_analysis.get('chippaux_index'),
+                    "arch_height_ratio": foot_analysis.get('arch_height_ratio')
+                },
+                "arch_type": foot_analysis.get('arch_type')
             }
 
-            if model_url:
-                update_data["model_3d_url"] = model_url
-            
+            # 2. เตรียมข้อมูลสำหรับ Table foot_scans (เฉพาะ Column ที่มีอยู่จริง)
+            update_data = {
+                "pf_severity": pf_assessment.get('severity'),
+                "pf_score": pf_assessment.get('score'),
+                "status": "completed",
+                "processed_at": datetime.utcnow().isoformat(),
+                # เก็บข้อมูลละเอียดลง JSONB column (ต้องสร้าง column นี้ใน DB ก่อน)
+                "analysis_result": full_analysis_data 
+            }
+
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # 1. Update scan table
+                # A. Update scan table
+                logger.info(f"Updating foot_scans for {scan_id}")
                 response = await client.patch(
                     f"{self.rest_url}/foot_scans?id=eq.{scan_id}",
                     headers={**self.headers, "Prefer": "return=minimal"},
                     json=update_data
                 )
+                
+                # ถ้า Error 400 ลอง fallback แบบไม่ส่ง analysis_result (กรณีลืมสร้าง column)
+                if response.status_code == 400:
+                    logger.warning("⚠️ Update failed (400). Retrying without 'analysis_result'...")
+                    del update_data["analysis_result"]
+                    response = await client.patch(
+                        f"{self.rest_url}/foot_scans?id=eq.{scan_id}",
+                        headers={**self.headers, "Prefer": "return=minimal"},
+                        json=update_data
+                    )
+                
                 response.raise_for_status()
                 
-                # 2. Save exercises
+                # B. Save exercises
                 if exercises:
                     await self._save_exercises(scan_id, exercises)
                 
-                # 3. Save shoe recommendations
+                # C. Save shoe recommendations
                 if shoes:
                     await self._save_shoe_recommendations(scan_id, shoes)
                 
@@ -163,7 +176,7 @@ class SupabaseStorage:
             raise
     
     async def _save_exercises(self, scan_id: str, exercises: List[Dict]):
-        """บันทึกแบบฝึกหัด (Internal helper)"""
+        """บันทึกแบบฝึกหัด"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 # ลบของเก่าก่อน
@@ -198,7 +211,7 @@ class SupabaseStorage:
             logger.warning(f"Could not save exercises: {e}")
     
     async def _save_shoe_recommendations(self, scan_id: str, shoes: List[Dict]):
-        """บันทึกรองเท้าแนะนำ (Internal helper)"""
+        """บันทึกรองเท้าแนะนำ"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 # ลบของเก่าก่อน
@@ -227,8 +240,3 @@ class SupabaseStorage:
                     
         except Exception as e:
             logger.warning(f"Could not save shoe recommendations: {e}")
-
-    # ฟังก์ชันสำหรับอัปโหลดโมเดล (ถ้ามี)
-    async def upload_model_file(self, scan_id: str, file_data: bytes) -> Optional[str]:
-        # (เว้นว่างไว้ หรือใส่โค้ด upload ถ้าคุณมี bucket)
-        return None
