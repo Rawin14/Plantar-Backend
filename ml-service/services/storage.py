@@ -113,8 +113,7 @@ class SupabaseStorage:
         อัปเดตผลการวิเคราะห์ทั้งหมด
         """
         try:
-            # 1. เตรียมข้อมูลสำหรับ Analysis Result (JSONB)
-            # รวมข้อมูลละเอียดทั้งหมดไว้ใน JSON ก้อนเดียว เพื่อไม่ให้รก Table หลัก
+            # 1. เตรียมข้อมูลสำหรับ Analysis Result (JSONB) - เก็บไว้เป็น Backup หรือใช้ดึงข้อมูลดิบ
             full_analysis_data = {
                 "foot_analysis": foot_analysis,
                 "risk_factors": pf_assessment.get('risk_factors', []),
@@ -130,13 +129,27 @@ class SupabaseStorage:
                 "arch_type": foot_analysis.get('arch_type')
             }
 
-            # 2. เตรียมข้อมูลสำหรับ Table foot_scans (เฉพาะ Column ที่มีอยู่จริง)
+            # 2. เตรียมข้อมูลสำหรับ Table foot_scans (ใส่ให้ครบทุกคอลัมน์)
             update_data = {
                 "pf_severity": pf_assessment.get('severity'),
                 "pf_score": pf_assessment.get('score'),
                 "status": "completed",
                 "processed_at": datetime.utcnow().isoformat(),
-                # เก็บข้อมูลละเอียดลง JSONB column (ต้องสร้าง column นี้ใน DB ก่อน)
+                
+                # ✅ เพิ่ม: ข้อมูลแยกคอลัมน์ (ตามที่คุณต้องการ)
+                "arch_type": foot_analysis.get('arch_type'),
+                "staheli_index": foot_analysis.get('staheli_index'),
+                "chippaux_index": foot_analysis.get('chippaux_index'),
+                "arch_height_ratio": foot_analysis.get('arch_height_ratio'),
+                "detected_side": foot_analysis.get('detected_side'),
+                "confidence": foot_analysis.get('confidence'),
+                "analysis_method": foot_analysis.get('method'),
+                
+                # ข้อมูล JSON/Array
+                "measurements": foot_analysis.get('measurements'),
+                "risk_factors": pf_assessment.get('risk_factors'),
+                
+                # เก็บตัวเต็มไว้ใน JSONB ด้วย (เผื่ออนาคต)
                 "analysis_result": full_analysis_data 
             }
 
@@ -149,14 +162,21 @@ class SupabaseStorage:
                     json=update_data
                 )
                 
-                # ถ้า Error 400 ลอง fallback แบบไม่ส่ง analysis_result (กรณีลืมสร้าง column)
+                # Fallback: ถ้า Error 400 (เช่นลืมสร้างคอลัมน์) ให้ลองส่งแบบย่อ
                 if response.status_code == 400:
-                    logger.warning("⚠️ Update failed (400). Retrying without 'analysis_result'...")
-                    del update_data["analysis_result"]
+                    logger.warning("⚠️ Update failed (400). Columns might be missing. Retrying with minimal data...")
+                    # ลบคีย์ที่อาจจะไม่มีใน DB ออก
+                    minimal_data = {
+                        "pf_severity": update_data["pf_severity"],
+                        "pf_score": update_data["pf_score"],
+                        "status": "completed",
+                        "processed_at": update_data["processed_at"],
+                        "analysis_result": full_analysis_data
+                    }
                     response = await client.patch(
                         f"{self.rest_url}/foot_scans?id=eq.{scan_id}",
                         headers={**self.headers, "Prefer": "return=minimal"},
-                        json=update_data
+                        json=minimal_data
                     )
                 
                 response.raise_for_status()
@@ -174,41 +194,6 @@ class SupabaseStorage:
         except Exception as e:
             logger.error(f"Error updating scan analysis: {e}")
             raise
-    
-    async def _save_exercises(self, scan_id: str, exercises: List[Dict]):
-        """บันทึกแบบฝึกหัด"""
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # ลบของเก่าก่อน
-                await client.delete(
-                    f"{self.rest_url}/scan_exercises?scan_id=eq.{scan_id}",
-                    headers=self.headers
-                )
-                
-                # เตรียมข้อมูลใหม่
-                exercise_data = []
-                for ex in exercises:
-                    data = {
-                        "scan_id": scan_id,
-                        "exercise_name": ex.get('name', ex.get('exercise_name')),
-                        "description": ex.get('description'),
-                        "duration": ex.get('duration'),
-                        "sets": ex.get('sets'),
-                        "reps": ex.get('reps'),
-                        "video_url": ex.get('video_url')
-                    }
-                    exercise_data.append(data)
-                
-                if exercise_data:
-                    response = await client.post(
-                        f"{self.rest_url}/scan_exercises",
-                        headers={**self.headers, "Prefer": "return=minimal"},
-                        json=exercise_data
-                    )
-                    response.raise_for_status()
-                    
-        except Exception as e:
-            logger.warning(f"Could not save exercises: {e}")
     
     async def _save_shoe_recommendations(self, scan_id: str, shoes: List[Dict]):
         """บันทึกรองเท้าแนะนำ"""
