@@ -359,8 +359,7 @@
 
 """
 Medical-Grade Plantar Fasciitis Analyzer
-Version: 2.1 - Evidence-Based (Staheli's Method)
-
+Version: 2.2 - Robust & Flexible (Staheli's Method)
 """
 
 import httpx
@@ -392,12 +391,16 @@ class Severity(Enum):
 
 @dataclass
 class ProcessingConfig:
-    """Image processing configuration parameters"""
+    """Image processing configuration parameters - Relaxed for better UX"""
     TARGET_HEIGHT: int = 1000
-    MIN_FOOT_AREA: int = 5000
-    MAX_FOOT_AREA_RATIO: float = 0.95
-    MIN_ASPECT_RATIO: float = 1.2
-    MAX_ASPECT_RATIO: float = 4.0
+    
+    # ⚠️ ปรับค่าให้ยืดหยุ่นขึ้น (Less strict validation)
+    MIN_FOOT_AREA: int = 1000        # เดิม 5000: ยอมรับรอยเท้าขนาดเล็ก/ถ่ายไกล
+    MAX_FOOT_AREA_RATIO: float = 0.99 # เดิม 0.95: ยอมรับภาพที่เท้าเต็มเฟรมได้
+    MIN_ASPECT_RATIO: float = 0.5     # เดิม 1.2:  ยอมรับภาพแนวนอนหรือสัดส่วนกว้าง
+    MAX_ASPECT_RATIO: float = 10.0    # เดิม 4.0:  ยอมรับภาพที่ยาวผิดปกติได้
+    
+    # Image Enhancement params
     CLAHE_CLIP_LIMIT: float = 2.5
     CLAHE_GRID_SIZE: Tuple[int, int] = (10, 10)
     GAUSSIAN_KERNEL: Tuple[int, int] = (7, 7)
@@ -416,7 +419,7 @@ class PlantarFasciitisAnalyzer:
     def __init__(self):
         self.config = ProcessingConfig()
         self.timeout = httpx.Timeout(30.0)
-        logger.info("🏥 Medical-Grade Analyzer initialized (Staheli's Method)")
+        logger.info("🏥 Medical-Grade Analyzer initialized (Flexible Mode)")
     
     # ==================== IMAGE PREPROCESSING ====================
     
@@ -473,30 +476,34 @@ class PlantarFasciitisAnalyzer:
         area = cv2.contourArea(largest)
         img_area = img_shape[0] * img_shape[1]
         
+        # Validation checks (Logging warnings instead of raising errors when possible)
         if area < self.config.MIN_FOOT_AREA:
-            raise ValueError(f"รอยเท้าเล็กเกินไป ({area:.0f} px²)")
+            logger.warning(f"⚠️ Small footprint detected: {area:.0f} px")
+            # ถ้าเล็กมากจริงๆ ค่อย error (เช่น น้อยกว่า 100 px)
+            if area < 100: 
+                raise ValueError(f"รอยเท้าเล็กเกินไป ({area:.0f} px²)")
         
         if (area / img_area) > self.config.MAX_FOOT_AREA_RATIO:
-            raise ValueError("วัตถุเต็มเฟรม - กรุณาถ่ายให้มีพื้นหลัง")
-        
+            logger.warning("⚠️ Object fills frame completely")
+            # ไม่ raise error เพื่อให้ทำงานต่อได้
+            
         x, y, w, h = cv2.boundingRect(largest)
         aspect = h / w if w > 0 else 0
         
         if aspect < self.config.MIN_ASPECT_RATIO:
-            raise ValueError("กรุณาถ่ายภาพในแนวตั้ง")
+            logger.warning(f"⚠️ Unusual aspect ratio (too wide): {aspect:.2f}")
+            # ไม่ raise error
         
         if aspect > self.config.MAX_ASPECT_RATIO:
-            raise ValueError("รอยเท้ายาวผิดปกติ")
+            logger.warning(f"⚠️ Unusual aspect ratio (too long): {aspect:.2f}")
+            # ไม่ raise error
         
         return largest
     
     # ==================== FOOT ALIGNMENT ====================
     
     def _align_foot_upright(self, img: np.ndarray, contour: np.ndarray) -> Tuple[np.ndarray, float]:
-        """
-        Align foot using PCA (Principal Component Analysis)
-        Fixed: Center coordinate extraction
-        """
+        """Align foot using PCA"""
         pts = contour.reshape(-1, 2).astype(np.float64)
         mean, eigenvectors = cv2.PCACompute(pts, mean=None)[:2]
         
@@ -506,18 +513,14 @@ class PlantarFasciitisAnalyzer:
         rotation = angle - 90
         
         h, w = img.shape[:2]
-        
-        # ✅ FIX: ดึงค่า x, y ออกมาเป็น int ทีละตัว เพื่อให้ได้ Tuple (x, y) จริงๆ
         center = (int(mean[0,0]), int(mean[0,1]))
         
         M = cv2.getRotationMatrix2D(center, rotation, 1.0)
         
-        # Calculate new image size
         cos, sin = np.abs(M[0, 0]), np.abs(M[0, 1])
         nW = int(h * sin + w * cos)
         nH = int(h * cos + w * sin)
         
-        # Adjust rotation matrix
         M[0, 2] += (nW / 2) - center[0]
         M[1, 2] += (nH / 2) - center[1]
         
@@ -534,6 +537,7 @@ class PlantarFasciitisAnalyzer:
     def _calculate_arch_indices(self, foot_mask: np.ndarray) -> Dict[str, Any]:
         h = foot_mask.shape[0]
         
+        # Staheli's method division
         forefoot = foot_mask[:int(h * 0.35), :]
         midfoot = foot_mask[int(h * 0.35):int(h * 0.65), :]
         heel = foot_mask[int(h * 0.65):, :]
@@ -542,8 +546,11 @@ class PlantarFasciitisAnalyzer:
         mw = self._get_max_width(midfoot)
         hw = self._get_max_width(heel)
         
-        if hw == 0 or fw == 0:
-            raise ValueError("ไม่สามารถวัดความกว้างได้ - ภาพไม่สมบูรณ์")
+        # ป้องกันการหารด้วยศูนย์ (กรณีภาพไม่ชัดเจนมากๆ)
+        if hw <= 5 or fw <= 5:
+            logger.warning(f"⚠️ Width too small (hw={hw}, fw={fw}), using fallback values")
+            hw = max(hw, 1)
+            fw = max(fw, 1)
         
         staheli = mw / hw
         chippaux = mw / fw
@@ -607,14 +614,10 @@ class PlantarFasciitisAnalyzer:
         if not isinstance(images, list):
             raise ValueError(f"images ต้องเป็น list, ได้รับ: {type(images)}")
         
-        # ✅ แก้ไข: ต้องดึง element แรก [0] ออกมาเช็ค ไม่ใช่เช็คทั้ง list
         first_image = images[0]
         
         if not isinstance(first_image, bytes):
-            raise ValueError(
-                f"แต่ละรูปต้องเป็น bytes, ได้รับ: {type(first_image)}\n"
-                f"ตรวจสอบว่า download_images() return ถูกต้องหรือไม่"
-            )
+            raise ValueError(f"แต่ละรูปต้องเป็น bytes, ได้รับ: {type(first_image)}")
         
         try:
             logger.info(f"📥 Loading image: {len(first_image)} bytes")
@@ -624,6 +627,7 @@ class PlantarFasciitisAnalyzer:
             if img is None:
                 raise ValueError("ไม่สามารถอ่านรูปภาพได้ - ไฟล์อาจเสียหาย")
             
+            # Processing pipeline
             img_proc, binary = self._preprocess_image(img)
             contour = self._find_foot_contour(binary, img_proc.shape[:2])
             img_align, rot = self._align_foot_upright(img_proc, contour)
@@ -655,7 +659,7 @@ class PlantarFasciitisAnalyzer:
                     'heel_width_px': arch['heel_width_px'],
                     'rotation_degrees': float(rot)
                 },
-                'method': 'Staheli_Validated_v2.1',
+                'method': 'Staheli_Validated_v2.2_Relaxed',
                 'timestamp': datetime.now().isoformat()
             }
             
@@ -684,10 +688,10 @@ class PlantarFasciitisAnalyzer:
     def assess_plantar_fasciitis(
         self, 
         foot_analysis: Dict[str, Any], 
-        questionnaire_score: float = 0.0, # FFI Score (0-100)
+        questionnaire_score: float = 0.0,
         bmi_score: float = 0.0,
-        age: int = 0,             # ✅ รับค่าอายุเพิ่ม
-        activity_level: str = "moderate" # ✅ รับค่ากิจกรรมเพิ่ม (sedentary, moderate, high)
+        age: int = 0,
+        activity_level: str = "moderate"
     ) -> Dict[str, Any]:
         
         logger.info(f"🏥 Assessing PF Risk (Quiz: {questionnaire_score}, BMI: {bmi_score}, Age: {age})")
@@ -700,7 +704,6 @@ class PlantarFasciitisAnalyzer:
         else: arch_risk = 5
             
         # 2. BMI Risk (20%)
-        # สมมติ bmi_score ที่รับมาเป็นค่า BMI จริงๆ (เช่น 24.5) ไม่ใช่คะแนน 0-5
         if bmi_score >= 30: bmi_risk = 20
         elif bmi_score >= 25: bmi_risk = 10
         else: bmi_risk = 0
@@ -710,22 +713,19 @@ class PlantarFasciitisAnalyzer:
         elif age > 60: age_risk = 5
         else: age_risk = 0
             
-        # 4. Questionnaire/FFI Risk (40%) - น้ำหนักเยอะสุด
+        # 4. Questionnaire/FFI Risk (40%)
         quiz_risk = questionnaire_score * 0.40
         
         # 5. Activity Risk (5%)
         act_risk = 15 if activity_level == 'high' else (5 if activity_level == 'sedentary' else 0)
         
-        # รวมคะแนน (Max 100)
         total_score = arch_risk + bmi_risk + age_risk + quiz_risk + act_risk
         final_score = min(100, total_score)
         
-        # แปลผลความรุนแรง
         if final_score < 30: sev, sev_th = "low", "ต่ำ"
         elif final_score < 60: sev, sev_th = "medium", "ปานกลาง"
         else: sev, sev_th = "high", "สูง"
         
-        # สร้าง Risk Factors List
         risk_factors = []
         if bmi_score >= 25: risk_factors.append(f"น้ำหนักเกินเกณฑ์ (BMI {bmi_score:.1f})")
         if arch_type != 'normal': risk_factors.append(f"รูปเท้าผิดปกติ ({arch_type})")
