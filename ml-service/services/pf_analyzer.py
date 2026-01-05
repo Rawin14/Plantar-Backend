@@ -359,7 +359,7 @@
 
 """
 Medical-Grade Plantar Fasciitis Analyzer
-Version: 2.3 - Robust & Flexible with Thai Localization
+Version: 2.2 - Robust & Flexible (Staheli's Method)
 """
 
 import httpx
@@ -732,21 +732,11 @@ class PlantarFasciitisAnalyzer:
         if 40 <= age <= 60: risk_factors.append("ช่วงอายุมีความเสี่ยง")
         if questionnaire_score > 40: risk_factors.append("คะแนนอาการปวดสูง")
         
-        # ✅ แปลง arch_type เป็นภาษาไทยสำหรับแสดงผล
-        arch_map_th = {
-            "flat_foot": "เท้าแบน",
-            "severe_high_arch": "อุ้งเท้าสูงมาก",
-            "high_arch": "อุ้งเท้าสูง",
-            "normal": "ปกติ"
-        }
-        arch_type_th = arch_map_th.get(arch_type, arch_type)
-
         return {
             'severity': sev,
             'severity_thai': sev_th,
             'score': round(final_score, 1),
-            'arch_type': arch_type,          # ค่าภาษาอังกฤษ (สำหรับ Logic)
-            'arch_type_thai': arch_type_th,  # ค่าภาษาไทย (สำหรับแสดงผล)
+            'arch_type': arch_type,
             'indicators': {
                 'scan_score': foot_analysis.get('staheli_index', 0),
                 'questionnaire_score': questionnaire_score,
