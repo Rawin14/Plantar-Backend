@@ -1,12 +1,13 @@
 """
 Image Processing Service
-ประมวลผลรูปภาพและสร้าง 3D model
+ประมวลผลรูปภาพพื้นฐาน
 """
 
 import httpx
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Optional
 import logging
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -14,15 +15,20 @@ class ImageProcessor:
     """ประมวลผลรูปภาพ"""
     
     def __init__(self):
-        self.timeout = httpx.Timeout(30.0)
+        # เพิ่ม timeout ให้เหมาะสมกับการดาวน์โหลดไฟล์รูปภาพ
+        self.timeout = httpx.Timeout(connect=10.0, read=30.0)
     
     async def download_images(self, urls: List[str]) -> List[bytes]:
         """
         ดาวน์โหลดรูปภาพจาก URLs
         """
+        if not urls:
+            raise ValueError("URL list is empty")
+
         images = []
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # สร้าง Tasks สำหรับดาวน์โหลดแบบ Parallel
             tasks = [self._download_single(client, url) for url in urls]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
@@ -43,83 +49,19 @@ class ImageProcessor:
         self, 
         client: httpx.AsyncClient, 
         url: str
-    ) -> bytes:
+    ) -> Optional[bytes]:
         """ดาวน์โหลดรูปเดียว"""
         try:
             response = await client.get(url)
             response.raise_for_status()
+            
+            # ตรวจสอบเบื้องต้นว่าเป็นรูปภาพหรือไม่ (Optional)
+            content_type = response.headers.get("content-type", "")
+            if "image" not in content_type:
+                logger.warning(f"URL {url} might not be an image (Content-Type: {content_type})")
+
             return response.content
         except Exception as e:
             logger.error(f"Failed to download {url}: {e}")
             return None
-    
-    def generate_3d_model(self, images: List[bytes]) -> Dict[str, Any]:
-        """
-        สร้าง 3D model จากรูปภาพ
         
-        TODO: Implement real photogrammetry
-        - COLMAP
-        - OpenMVG
-        - PyTorch3D
-        - Open3D
-        
-        Libraries to use:
-        - opencv-python
-        - numpy
-        - scipy
-        - open3d
-        - pytorch3d
-        """
-        logger.info(f"🔨 Generating 3D model from {len(images)} images...")
-        
-        # Mock 3D model data
-        try:
-            # --- พื้นที่สำหรับใส่ Algorithm Photogrammetry ของจริง ---
-            # ตัวอย่างเช่นเรียกใช้ Open3D, AliceVision, หรือ COLMAP
-            # ซึ่งต้องใช้ทรัพยากรเครื่องสูงมาก
-            
-            # สมมติว่าประมวลผลเสร็จแล้วได้ไฟล์ออกมา
-            # with open("temp_output.usdz", "rb") as f:
-            #     return f.read()
-            
-            # ⚠️ ระหว่างที่ยังไม่มี Algorithm จริง ให้ return None ไปก่อน
-            # เพื่อให้ระบบรู้ว่าไม่มีโมเดล ไม่ใช่ส่ง Mock มั่วๆ ไป
-            return None 
-            
-        except Exception as e:
-            logger.error(f"❌ Error generating 3D model: {e}")
-            return None
-    
-    def extract_measurements(self, model_3d: Dict[str, Any]) -> Dict[str, float]:
-        """
-        วัดขนาดเท้าจาก 3D model
-        
-        TODO: Implement real measurement algorithm
-        
-        Measurements to extract:
-        - length: ความยาวเท้า (heel to toe)
-        - width: ความกว้างเท้า (widest point)
-        - instep_height: ความสูงหน้าเท้า
-        - arch_height: ความสูงโค้งเท้า
-        - heel_width: ความกว้างส้นเท้า
-        - ball_girth: รอบวงเท้าตรงลูกเท้า
-        
-        Algorithm:
-        1. Find key landmarks on 3D model
-        2. Calculate distances between landmarks
-        3. Apply calibration/scaling
-        4. Return measurements in cm
-        """
-        logger.info(f"📏 Extracting measurements (MOCK)")
-        
-        # Mock measurements (in cm)
-        measurements = {
-            "length": round(24.5 + (hash(str(model_3d)) % 30) / 10, 1),
-            "width": round(9.5 + (hash(str(model_3d)) % 15) / 10, 1),
-            "instep_height": round(7.0 + (hash(str(model_3d)) % 20) / 10, 1),
-            "arch_height": round(2.0 + (hash(str(model_3d)) % 15) / 10, 1),
-            "heel_width": round(6.0 + (hash(str(model_3d)) % 15) / 10, 1),
-            "ball_girth": round(23.5 + (hash(str(model_3d)) % 30) / 10, 1)
-        }
-        
-        return measurements

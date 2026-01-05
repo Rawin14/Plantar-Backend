@@ -27,11 +27,12 @@ class ProcessingConfig:
     MAX_ASPECT_RATIO: float = 4.0
     CLAHE_CLIP_LIMIT: float = 3.0
     CLAHE_GRID_SIZE: Tuple[int, int] = (8, 8)
-    GAUSSIAN_KERNEL: Tuple[int, int] = (9, 9)
-    ADAPTIVE_BLOCK_SIZE: int = 25
-    ADAPTIVE_C: int = 5
-    MORPH_CLOSE_KERNEL: int = 7
-    MORPH_OPEN_KERNEL: int = 5
+    GAUSSIAN_KERNEL: Tuple[int, int] = (9, 9) # เพิ่มขนาด Kernel เพื่อเบลอผิวให้เนียนขึ้น
+    
+    # ⚠️ [ปรับปรุง] ค่าเกณฑ์สำหรับวินิจฉัย (Threshold Calibration)
+    # ขยับ Flat Foot ขึ้นจาก 0.26 เป็น 0.28 เพื่อลด False Positive จากเงา
+    HIGH_ARCH_THRESHOLD: float = 0.21
+    FLAT_FOOT_THRESHOLD: float = 0.28  
 
 # ==================== MAIN ANALYZER CLASS ====================
 
@@ -43,7 +44,7 @@ class PlantarFasciitisAnalyzer:
     def __init__(self):
         self.config = ProcessingConfig()
         self.timeout = httpx.Timeout(30.0)
-        logger.info("🏥 PF Analyzer initialized (Cavanagh & Rodgers Method)")
+        logger.info("🏥 PF Analyzer initialized (Cavanagh & Rodgers Method - Calibrated)")
     
     # ==================== IMAGE PROCESSING ====================
     
@@ -59,33 +60,36 @@ class PlantarFasciitisAnalyzer:
         # Convert to grayscale
         gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
         
-        # Enhance contrast (CLAHE)
+        # Enhance contrast (CLAHE) - ช่วยให้เห็นรอยเท้าชัดขึ้นในที่มืด
         clahe = cv2.createCLAHE(
             clipLimit=self.config.CLAHE_CLIP_LIMIT,
             tileGridSize=self.config.CLAHE_GRID_SIZE
         )
         enhanced = clahe.apply(gray)
         
-        # Gaussian Blur
+        # Gaussian Blur - ลด Noise
         blurred = cv2.GaussianBlur(enhanced, self.config.GAUSSIAN_KERNEL, 0)
         
-        # Adaptive Thresholding
-        binary = cv2.adaptiveThreshold(
-            blurred, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            self.config.ADAPTIVE_BLOCK_SIZE,
-            self.config.ADAPTIVE_C
-        )
+        # ⚠️ [ปรับปรุง 1] ใช้ Otsu's Thresholding แทน Adaptive Thresholding
+        # Otsu จะหาค่าแสงที่เหมาะสมที่สุดให้อัตโนมัติ ช่วยตัดปัญหาแสงไม่เท่ากัน
+        # ใช้ THRESH_BINARY_INV + THRESH_OTSU (สมมติว่าเท้าเข้มกว่าพื้น)
+        _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # Morphological Operations (Fill holes & remove noise)
-        kernel_close = np.ones((self.config.MORPH_CLOSE_KERNEL, self.config.MORPH_CLOSE_KERNEL), np.uint8)
-        kernel_open = np.ones((self.config.MORPH_OPEN_KERNEL, self.config.MORPH_OPEN_KERNEL), np.uint8)
+        # ⚠️ [ปรับปรุง 2] ใช้ Morphological Operations (Erode) ตัดเงา
+        # Erode (กัดขอบ): ช่วยลบเงาจางๆ ที่ขอบเท้าซึ่งทำให้เท้าดูอ้วนเกินจริง
+        kernel = np.ones((5, 5), np.uint8) # เพิ่มขนาด kernel เล็กน้อย
         
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close, iterations=2)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_open, iterations=1)
+        # กัดขอบออก 2 รอบ เพื่อกำจัดเงา
+        eroded = cv2.erode(binary, kernel, iterations=2)
         
-        return img_resized, binary
+        # ขยายกลับ 2 รอบ เพื่อให้ได้รูปทรงเท้าที่เหลืออยู่กลับมาเต็ม
+        processed_binary = cv2.dilate(eroded, kernel, iterations=2)
+        
+        # ปิดรูพรุนภายในเนื้อเท้า (Closing)
+        kernel_close = np.ones((7, 7), np.uint8)
+        processed_binary = cv2.morphologyEx(processed_binary, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+        
+        return img_resized, processed_binary
 
     def _find_foot_contour(self, binary: np.ndarray, img_shape: Tuple[int, int]) -> np.ndarray:
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -93,6 +97,7 @@ class PlantarFasciitisAnalyzer:
         if not contours:
             raise ValueError("ไม่พบรอยเท้าในภาพ")
         
+        # เลือก Contour ที่ใหญ่ที่สุด
         largest = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(largest)
         img_area = img_shape[0] * img_shape[1]
@@ -105,9 +110,8 @@ class PlantarFasciitisAnalyzer:
             raise ValueError("วัตถุเต็มเฟรม - กรุณาถ่ายให้มีพื้นหลัง")
             
         x, y, w, h = cv2.boundingRect(largest)
-        aspect = h / w if w > 0 else 0
         
-        # Check shape complexity (prevent box/book detection)
+        # Check shape complexity
         rect_area = w * h
         extent = area / rect_area
         if extent > 0.88:
@@ -125,7 +129,7 @@ class PlantarFasciitisAnalyzer:
         rotation = angle - 90
         
         h, w = img.shape[:2]
-        center = (int(mean[0,0]), int(mean[0,1])) # Fix: Explicitly extract x,y
+        center = (int(mean[0,0]), int(mean[0,1]))
         
         M = cv2.getRotationMatrix2D(center, rotation, 1.0)
         
@@ -149,7 +153,6 @@ class PlantarFasciitisAnalyzer:
         Calculate Arch Index using Cavanagh & Rodgers (1987) method.
         AI = Area(Middle Third) / Area(Total Foot excluding toes)
         """
-        # 1. Find bounding box of the foot
         y_indices, x_indices = np.where(foot_mask > 0)
         if len(y_indices) == 0:
             raise ValueError("Foot mask is empty")
@@ -158,36 +161,31 @@ class PlantarFasciitisAnalyzer:
         bottom_y = np.max(y_indices)
         height = bottom_y - top_y
         
-        # 2. Exclude toes (Top 20-25% roughly based on literature)
-        # Cavanagh method actually excludes toes by landmark, but 20% cut is a standard approximation for image processing
+        # ตัดนิ้วเท้าออก 20% ด้านบน
         toes_cutoff = int(height * 0.20)
         foot_start_y = top_y + toes_cutoff
         
-        # 3. Divide remaining foot (Metatarsal to Heel) into 3 equal sections
+        # แบ่งส่วนที่เหลือเป็น 3 ส่วนเท่าๆ กัน
         sole_length = bottom_y - foot_start_y
         section_height = sole_length // 3
         
         if section_height <= 0:
             raise ValueError("Foot length too short for analysis")
 
-        # Define regions (A=Rearfoot/Heel, B=Midfoot, C=Forefoot)
-        # Note: In image coordinates (top-down), Forefoot is top, Heel is bottom
-        # Region C (Forefoot)
+        # Define regions
         region_c_start = foot_start_y
         region_c_end = foot_start_y + section_height
         
-        # Region B (Midfoot - The Arch)
         region_b_start = region_c_end
         region_b_end = region_c_end + section_height
         
-        # Region A (Rearfoot - Heel)
         region_a_start = region_b_end
-        region_a_end = bottom_y # Use remaining pixels
+        region_a_end = bottom_y
         
-        # Calculate Areas (Pixel counts)
-        area_a = cv2.countNonZero(foot_mask[region_a_start:region_a_end, :])
-        area_b = cv2.countNonZero(foot_mask[region_b_start:region_b_end, :])
-        area_c = cv2.countNonZero(foot_mask[region_c_start:region_c_end, :])
+        # Calculate Areas
+        area_a = cv2.countNonZero(foot_mask[region_a_start:region_a_end, :]) # Heel
+        area_b = cv2.countNonZero(foot_mask[region_b_start:region_b_end, :]) # Arch (Midfoot)
+        area_c = cv2.countNonZero(foot_mask[region_c_start:region_c_end, :]) # Forefoot
         
         total_area = area_a + area_b + area_c
         
@@ -197,14 +195,14 @@ class PlantarFasciitisAnalyzer:
         # Calculate Arch Index
         arch_index = area_b / total_area
         
-        # Classification (Cavanagh & Rodgers Criteria)
+        # ⚠️ [ปรับปรุง 3] ใช้เกณฑ์ใหม่ที่ปรับให้สูงขึ้น (Calibrated Thresholds)
         # High Arch: <= 0.21
-        # Normal: 0.21 - 0.26
-        # Flat Foot: >= 0.26
+        # Normal: 0.21 - 0.28 (ขยายช่วง Normal ให้กว้างขึ้น)
+        # Flat Foot: >= 0.28 (เดิม 0.26)
         
-        if arch_index <= 0.21:
+        if arch_index <= self.config.HIGH_ARCH_THRESHOLD:
             arch_type = "high"
-        elif arch_index >= 0.26:
+        elif arch_index >= self.config.FLAT_FOOT_THRESHOLD:
             arch_type = "flat"
         else:
             arch_type = "normal"
@@ -234,14 +232,14 @@ class PlantarFasciitisAnalyzer:
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if img is None: raise ValueError("Image decode failed")
             
-            # 2. Preprocess & Find Contour
+            # 2. Preprocess & Find Contour (ใช้ Logic ใหม่)
             img_proc, binary = self._preprocess_image(img)
             contour = self._find_foot_contour(binary, img_proc.shape[:2])
             
             # 3. Align Foot
             img_align, rot = self._align_foot_upright(img_proc, contour)
             
-            # 4. Re-segment aligned image
+            # 4. Re-segment aligned image (ใช้ Logic ใหม่)
             _, binary_align = self._preprocess_image(img_align)
             contour_align = self._find_foot_contour(binary_align, img_align.shape[:2])
             
@@ -249,22 +247,22 @@ class PlantarFasciitisAnalyzer:
             mask = np.zeros_like(binary_align)
             cv2.drawContours(mask, [contour_align], -1, 255, thickness=cv2.FILLED)
             
-            # 5. Calculate Arch Index (Cavanagh & Rodgers)
+            # 5. Calculate Arch Index (ใช้เกณฑ์ใหม่)
             result = self._calculate_cavanagh_index(mask)
             
             # 6. Detect Side
             side = self._detect_side(contour_align, img_align.shape[1])
             
-            # 7. Confidence Score (Simple logic)
+            # 7. Confidence Score
             confidence = 0.90
             if abs(rot) > 20: confidence -= 0.1
             
             return {
                 'arch_type': result['arch_type'],
                 'detected_side': side,
-                'arch_height_ratio': result['arch_index'], # AI Value
-                'staheli_index': result['arch_index'],     # Using AI as primary score
-                'chippaux_index': 0.0,                     # Not used in this method
+                'arch_height_ratio': result['arch_index'],
+                'staheli_index': result['arch_index'],
+                'chippaux_index': 0.0,
                 'heel_alignment': 'neutral',
                 'confidence': confidence,
                 'method': 'Cavanagh_Rodgers_1987',
@@ -292,8 +290,8 @@ class PlantarFasciitisAnalyzer:
         arch_type = foot_analysis['arch_type']
         ai_value = foot_analysis['arch_height_ratio']
         
-        # 1. Arch Risk Score (Based on AI deviation)
-        # Flat (AI >= 0.26) or High (AI <= 0.21) are risks
+        # 1. Arch Risk Score
+        # Flat or High are risks
         if arch_type == 'flat': 
             arch_risk = 25
         elif arch_type == 'high': 
@@ -301,7 +299,7 @@ class PlantarFasciitisAnalyzer:
         else: 
             arch_risk = 5
             
-        # 2. BMI Risk (Real BMI value)
+        # 2. BMI Risk
         if bmi_score >= 30: bmi_risk = 20
         elif bmi_score >= 25: bmi_risk = 10
         else: bmi_risk = 0
@@ -311,12 +309,12 @@ class PlantarFasciitisAnalyzer:
         elif age > 60: age_risk = 5
         else: age_risk = 0
             
-        # 4. Questionnaire (Symptoms) - Weight 40%
+        # 4. Questionnaire Score
         quiz_risk = questionnaire_score * 0.40
         
         # Total Score
         total_score = arch_risk + bmi_risk + age_risk + quiz_risk
-        # Activity adjustment
+        
         if activity_level == 'high': total_score += 10
         elif activity_level == 'sedentary': total_score += 5
             
