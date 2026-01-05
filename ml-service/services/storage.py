@@ -1,6 +1,6 @@
 """
 Supabase Storage Service (REST API)
-Revised for robustness and schema compatibility
+Complete version with all helper methods
 """
 
 import httpx
@@ -23,7 +23,8 @@ class SupabaseStorage:
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
         }
-        self.timeout = httpx.Timeout(10.0, connect=5.0, read=10.0)
+        # เพิ่ม Timeout ให้เยอะหน่อยกันหลุด
+        self.timeout = httpx.Timeout(20.0, connect=10.0, read=20.0)
         logger.info("✅ Supabase REST client initialized")
     
     async def check_connection(self) -> bool:
@@ -69,9 +70,7 @@ class SupabaseStorage:
         status: str,
         error_message: Optional[str] = None
     ):
-        """
-        อัปเดตสถานะของ scan
-        """
+        """อัปเดตสถานะของ scan"""
         try:
             update_data = {
                 "status": status
@@ -84,7 +83,7 @@ class SupabaseStorage:
                 update_data["started_at"] = datetime.utcnow().isoformat()
             elif status == "completed":
                 update_data["processed_at"] = datetime.utcnow().isoformat()
-                update_data["error_message"] = None  # Clear error
+                # update_data["error_message"] = None # Optional: Clear error on success
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.patch(
@@ -93,13 +92,11 @@ class SupabaseStorage:
                     json=update_data
                 )
                 response.raise_for_status()
-                
                 logger.info(f"✅ Updated scan {scan_id} status: {status}")
                 
         except Exception as e:
             logger.error(f"Error updating scan status: {e}")
-            # ไม่ raise เพื่อให้ Flow ทำงานต่อได้ แต่ log error ไว้
-    
+
     async def update_scan_analysis(
         self,
         scan_id: str,
@@ -109,11 +106,9 @@ class SupabaseStorage:
         shoes: List[Dict[str, Any]],
         foot_side: Optional[str] = None
     ):
-        """
-        อัปเดตผลการวิเคราะห์ทั้งหมด
-        """
+        """อัปเดตผลการวิเคราะห์ทั้งหมด"""
         try:
-            # 1. เตรียมข้อมูลสำหรับ Analysis Result (JSONB) - เก็บไว้เป็น Backup หรือใช้ดึงข้อมูลดิบ
+            # 1. เตรียมข้อมูล Analysis Result (JSONB)
             full_analysis_data = {
                 "foot_analysis": foot_analysis,
                 "risk_factors": pf_assessment.get('risk_factors', []),
@@ -129,14 +124,14 @@ class SupabaseStorage:
                 "arch_type": foot_analysis.get('arch_type')
             }
 
-            # 2. เตรียมข้อมูลสำหรับ Table foot_scans (ใส่ให้ครบทุกคอลัมน์)
+            # 2. เตรียมข้อมูลสำหรับ Table foot_scans
             update_data = {
                 "pf_severity": pf_assessment.get('severity'),
                 "pf_score": pf_assessment.get('score'),
                 "status": "completed",
                 "processed_at": datetime.utcnow().isoformat(),
                 
-                # ✅ เพิ่ม: ข้อมูลแยกคอลัมน์ (ตามที่คุณต้องการ)
+                # แยกคอลัมน์ (ตามที่คุณต้องการ)
                 "arch_type": foot_analysis.get('arch_type'),
                 "staheli_index": foot_analysis.get('staheli_index'),
                 "chippaux_index": foot_analysis.get('chippaux_index'),
@@ -145,27 +140,28 @@ class SupabaseStorage:
                 "confidence": foot_analysis.get('confidence'),
                 "analysis_method": foot_analysis.get('method'),
                 
-                # ข้อมูล JSON/Array
+                # JSON/Array Columns
                 "measurements": foot_analysis.get('measurements'),
                 "risk_factors": pf_assessment.get('risk_factors'),
                 
-                # เก็บตัวเต็มไว้ใน JSONB ด้วย (เผื่ออนาคต)
+                # Full JSONB Backup
                 "analysis_result": full_analysis_data 
             }
 
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 # A. Update scan table
                 logger.info(f"Updating foot_scans for {scan_id}")
+                
+                # Try full update first
                 response = await client.patch(
                     f"{self.rest_url}/foot_scans?id=eq.{scan_id}",
                     headers={**self.headers, "Prefer": "return=minimal"},
                     json=update_data
                 )
                 
-                # Fallback: ถ้า Error 400 (เช่นลืมสร้างคอลัมน์) ให้ลองส่งแบบย่อ
+                # Fallback mechanism: ถ้า Error 400 (เช่นลืมสร้างคอลัมน์ใหม่)
                 if response.status_code == 400:
-                    logger.warning("⚠️ Update failed (400). Columns might be missing. Retrying with minimal data...")
-                    # ลบคีย์ที่อาจจะไม่มีใน DB ออก
+                    logger.warning("⚠️ Update failed (400). Retrying with minimal data...")
                     minimal_data = {
                         "pf_severity": update_data["pf_severity"],
                         "pf_score": update_data["pf_score"],
@@ -178,14 +174,14 @@ class SupabaseStorage:
                         headers={**self.headers, "Prefer": "return=minimal"},
                         json=minimal_data
                     )
-                
+
                 response.raise_for_status()
                 
-                # B. Save exercises
+                # B. Save exercises (✅ ฟังก์ชันนี้ต้องมีอยู่จริงใน Class นี้)
                 if exercises:
                     await self._save_exercises(scan_id, exercises)
                 
-                # C. Save shoe recommendations
+                # C. Save shoe recommendations (✅ ฟังก์ชันนี้ต้องมีอยู่จริงใน Class นี้)
                 if shoes:
                     await self._save_shoe_recommendations(scan_id, shoes)
                 
@@ -194,9 +190,47 @@ class SupabaseStorage:
         except Exception as e:
             logger.error(f"Error updating scan analysis: {e}")
             raise
+
+    # ✅ Helper Methods ที่หายไป (ต้องใส่ไว้ใน Class SupabaseStorage)
     
+    async def _save_exercises(self, scan_id: str, exercises: List[Dict]):
+        """บันทึกแบบฝึกหัด (Internal helper)"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                # ลบของเก่าก่อน
+                await client.delete(
+                    f"{self.rest_url}/scan_exercises?scan_id=eq.{scan_id}",
+                    headers=self.headers
+                )
+                
+                # เตรียมข้อมูลใหม่
+                exercise_data = []
+                for ex in exercises:
+                    data = {
+                        "scan_id": scan_id,
+                        "exercise_name": ex.get('name', ex.get('exercise_name')),
+                        "description": ex.get('description'),
+                        "duration": ex.get('duration'),
+                        "sets": ex.get('sets'),
+                        "reps": ex.get('reps'),
+                        "video_url": ex.get('video_url')
+                    }
+                    exercise_data.append(data)
+                
+                if exercise_data:
+                    response = await client.post(
+                        f"{self.rest_url}/scan_exercises",
+                        headers={**self.headers, "Prefer": "return=minimal"},
+                        json=exercise_data
+                    )
+                    response.raise_for_status()
+                    logger.info(f"✅ Saved {len(exercise_data)} exercises")
+                    
+        except Exception as e:
+            logger.warning(f"Could not save exercises: {e}")
+
     async def _save_shoe_recommendations(self, scan_id: str, shoes: List[Dict]):
-        """บันทึกรองเท้าแนะนำ"""
+        """บันทึกรองเท้าแนะนำ (Internal helper)"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 # ลบของเก่าก่อน
@@ -222,6 +256,7 @@ class SupabaseStorage:
                         json=shoe_data
                     )
                     response.raise_for_status()
+                    logger.info(f"✅ Saved {len(shoe_data)} shoe recommendations")
                     
         except Exception as e:
             logger.warning(f"Could not save shoe recommendations: {e}")
