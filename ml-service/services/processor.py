@@ -16,7 +16,7 @@ class ImageProcessor:
     
     def __init__(self):
         # เพิ่ม timeout ให้เหมาะสมกับการดาวน์โหลดไฟล์รูปภาพ
-        self.timeout = httpx.Timeout(connect=10.0, read=30.0)
+        self.timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=30.0)
     
     async def download_images(self, urls: List[str]) -> List[bytes]:
         """
