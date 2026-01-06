@@ -280,8 +280,8 @@ class PlantarFasciitisAnalyzer:
             conf = self._calc_confidence(arch, rot)
             
             return {
-                'arch_type': arch['arch_type_thai'], # ✅ ส่งค่าภาษาไทยออกไปที่ Supabase
-                'arch_type_raw': arch['arch_type_enum'].value, # เก็บไว้ใช้ภายใน (Assess risk)
+                'arch_type': arch['arch_type_thai'],
+                'arch_type_en': arch['arch_type_enum'].value, 
                 'detected_side': side,
                 'arch_height_ratio': arch['staheli_index'],
                 'staheli_index': arch['staheli_index'],
