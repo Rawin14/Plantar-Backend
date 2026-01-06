@@ -281,7 +281,7 @@ class PlantarFasciitisAnalyzer:
             
             return {
                 'arch_type': arch['arch_type_thai'], # ✅ ส่งค่าภาษาไทยออกไปที่ Supabase
-                'arch_type_enum': arch['arch_type_enum'], # เก็บไว้ใช้ภายใน (Assess risk)
+                'arch_type_raw': arch['arch_type_enum'].value, # เก็บไว้ใช้ภายใน (Assess risk)
                 'detected_side': side,
                 'arch_height_ratio': arch['staheli_index'],
                 'staheli_index': arch['staheli_index'],
