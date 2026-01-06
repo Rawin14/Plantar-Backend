@@ -1,13 +1,12 @@
 """
 Supabase Storage Service (REST API)
-Complete version with all helper methods
+Cleaned version
 """
 
 import httpx
 from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class SupabaseStorage:
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
         }
-        # เพิ่ม Timeout ให้เยอะหน่อยกันหลุด
+        # เพิ่ม Timeout กันหลุด
         self.timeout = httpx.Timeout(20.0, connect=10.0, read=20.0)
         logger.info("✅ Supabase REST client initialized")
     
@@ -83,7 +82,6 @@ class SupabaseStorage:
                 update_data["started_at"] = datetime.utcnow().isoformat()
             elif status == "completed":
                 update_data["processed_at"] = datetime.utcnow().isoformat()
-                # update_data["error_message"] = None # Optional: Clear error on success
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.patch(
@@ -131,7 +129,7 @@ class SupabaseStorage:
                 "status": "completed",
                 "processed_at": datetime.utcnow().isoformat(),
                 
-                # แยกคอลัมน์ (ตามที่คุณต้องการ)
+                # คอลัมน์แยกย่อย
                 "arch_type": foot_analysis.get('arch_type'),
                 "staheli_index": foot_analysis.get('staheli_index'),
                 "chippaux_index": foot_analysis.get('chippaux_index'),
@@ -149,39 +147,22 @@ class SupabaseStorage:
             }
 
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # A. Update scan table
                 logger.info(f"Updating foot_scans for {scan_id}")
                 
-                # Try full update first
+                # ส่งข้อมูลเข้า DB (ไม่ต้องมี Fallback แล้ว เพราะ DB พร้อมแล้ว)
                 response = await client.patch(
                     f"{self.rest_url}/foot_scans?id=eq.{scan_id}",
                     headers={**self.headers, "Prefer": "return=minimal"},
                     json=update_data
                 )
                 
-                # Fallback mechanism: ถ้า Error 400 (เช่นลืมสร้างคอลัมน์ใหม่)
-                if response.status_code == 400:
-                    logger.warning("⚠️ Update failed (400). Retrying with minimal data...")
-                    minimal_data = {
-                        "pf_severity": update_data["pf_severity"],
-                        "pf_score": update_data["pf_score"],
-                        "status": "completed",
-                        "processed_at": update_data["processed_at"],
-                        "analysis_result": full_analysis_data
-                    }
-                    response = await client.patch(
-                        f"{self.rest_url}/foot_scans?id=eq.{scan_id}",
-                        headers={**self.headers, "Prefer": "return=minimal"},
-                        json=minimal_data
-                    )
-
+                # ถ้ามี Error 400/500 จะแจ้งเตือนทันที
                 response.raise_for_status()
                 
-                # B. Save exercises (✅ ฟังก์ชันนี้ต้องมีอยู่จริงใน Class นี้)
+                # บันทึกข้อมูลเสริม
                 if exercises:
                     await self._save_exercises(scan_id, exercises)
                 
-                # C. Save shoe recommendations (✅ ฟังก์ชันนี้ต้องมีอยู่จริงใน Class นี้)
                 if shoes:
                     await self._save_shoe_recommendations(scan_id, shoes)
                 
@@ -191,13 +172,13 @@ class SupabaseStorage:
             logger.error(f"Error updating scan analysis: {e}")
             raise
 
-    # ✅ Helper Methods ที่หายไป (ต้องใส่ไว้ใน Class SupabaseStorage)
+    # ✅ Helper Methods
     
     async def _save_exercises(self, scan_id: str, exercises: List[Dict]):
-        """บันทึกแบบฝึกหัด (Internal helper)"""
+        """บันทึกแบบฝึกหัด"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # ลบของเก่าก่อน
+                # ลบของเก่าก่อน (Reset)
                 await client.delete(
                     f"{self.rest_url}/scan_exercises?scan_id=eq.{scan_id}",
                     headers=self.headers
@@ -230,10 +211,10 @@ class SupabaseStorage:
             logger.warning(f"Could not save exercises: {e}")
 
     async def _save_shoe_recommendations(self, scan_id: str, shoes: List[Dict]):
-        """บันทึกรองเท้าแนะนำ (Internal helper)"""
+        """บันทึกรองเท้าแนะนำ"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # ลบของเก่าก่อน
+                # ลบของเก่าก่อน (Reset)
                 await client.delete(
                     f"{self.rest_url}/scan_shoe_recommendations?scan_id=eq.{scan_id}",
                     headers=self.headers

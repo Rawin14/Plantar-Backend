@@ -7,8 +7,8 @@ import httpx
 import asyncio
 from typing import List, Optional
 import logging
-from dataclasses import dataclass
 
+# ลบ dataclass ออกเพราะไม่ได้ใช้
 logger = logging.getLogger(__name__)
 
 class ImageProcessor:
@@ -37,6 +37,7 @@ class ImageProcessor:
                     logger.warning(f"⚠️ Failed to download image {i+1}: {result}")
                     continue
                 
+                # ตรวจสอบว่ามีข้อมูลกลับมาจริง (ไม่เป็น None และไม่ว่างเปล่า)
                 if result:
                     images.append(result)
         
@@ -64,4 +65,3 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"Failed to download {url}: {e}")
             return None
-        
