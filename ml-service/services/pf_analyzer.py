@@ -485,9 +485,320 @@
 #             recs.append("ประคบเย็นบริเวณที่ปวด 15-20 นาที")
 #         return recs
 
+# """
+# Medical-Grade Plantar Fasciitis Analyzer (Master Edition)
+# Version: 4.0 - High Precision, Dual-Index Metric, Auto-Side Detection
+# """
+
+# import numpy as np
+# import cv2
+# import tensorflow as tf
+# import os
+# import logging
+# from typing import Dict, Any, Tuple, Optional, List
+# from dataclasses import dataclass
+# from enum import Enum
+
+# logger = logging.getLogger(__name__)
+
+# # ==================== CONFIGURATION ====================
+
+# class ArchType(Enum):
+#     SEVERE_HIGH = "severe_high_arch"
+#     HIGH = "high_arch"
+#     NORMAL = "normal"
+#     FLAT = "flat_foot"
+
+# # Mapping ภาษาไทย
+# ARCH_TYPE_THAI = {
+#     "severe_high_arch": "อุ้งเท้าสูงมาก",
+#     "high_arch": "อุ้งเท้าสูง",
+#     "normal": "ปกติ",
+#     "flat_foot": "เท้าแบน"
+# }
+
+# @dataclass
+# class ProcessingConfig:
+#     TARGET_HEIGHT: int = 800
+#     AI_INPUT_SIZE: Tuple[int, int] = (256, 256)
+    
+#     # เกณฑ์การตัดสิน (Thresholds) - ปรับจูนสำหรับ AI Mask
+#     TH_FLAT: float = 0.85      # เกินนี้คือเท้าแบน
+#     TH_HIGH: float = 0.35      # ต่ำกว่านี้คืออุ้งเท้าสูง
+    
+#     # การวัดความกว้าง (ใช้ Percentile เพื่อตัด Noise)
+#     WIDTH_PERCENTILE: int = 98 
+
+# # ==================== MAIN ANALYZER CLASS ====================
+
+# class PlantarFasciitisAnalyzer:
+#     def __init__(self):
+#         self.config = ProcessingConfig()
+        
+#         # --- Load AI Model ---
+#         self.model = None
+#         try:
+#             current_dir = os.path.dirname(__file__)
+#             model_path = os.path.join(current_dir, "foot_segmentation_model.h5")
+#             if os.path.exists(model_path):
+#                 self.model = tf.keras.models.load_model(model_path)
+#                 logger.info(f"🧠 Master AI Model loaded: {model_path}")
+#             else:
+#                 logger.warning("⚠️ Model not found. Accuracy will be degraded (Fallback mode).")
+#         except Exception as e:
+#             logger.error(f"❌ AI Model Load Error: {e}")
+
+#     # ==================== 1. PREPROCESSING (AI) ====================
+#     def _preprocess_image(self, img: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+#         # Resize for display/processing
+#         h, w = img.shape[:2]
+#         scale = self.config.TARGET_HEIGHT / h
+#         img_display = cv2.resize(img, (int(w * scale), self.config.TARGET_HEIGHT), interpolation=cv2.INTER_AREA)
+
+#         if self.model:
+#             try:
+#                 # Prepare for AI
+#                 img_ai = cv2.resize(img, self.config.AI_INPUT_SIZE)
+#                 img_ai = img_ai / 255.0
+#                 img_ai = np.expand_dims(img_ai, axis=0)
+
+#                 # Predict
+#                 pred = self.model.predict(img_ai, verbose=0)
+#                 mask = (pred[0, :, :, 0] > 0.5).astype(np.uint8) * 255
+
+#                 # Resize mask back
+#                 mask_resized = cv2.resize(mask, (img_display.shape[1], img_display.shape[0]), interpolation=cv2.INTER_NEAREST)
+                
+#                 # Clean Noise (Morphology)
+#                 kernel = np.ones((5,5), np.uint8)
+#                 mask_cleaned = cv2.morphologyEx(mask_resized, cv2.MORPH_OPEN, kernel)
+                
+#                 return img_display, mask_cleaned
+#             except Exception as e:
+#                 logger.error(f"AI Error: {e}")
+
+#         # Fallback (Otsu)
+#         gray = cv2.cvtColor(img_display, cv2.COLOR_BGR2GRAY)
+#         blur = cv2.GaussianBlur(gray, (5,5), 0)
+#         _, mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+#         return img_display, mask
+
+#     # ==================== 2. ALIGNMENT (PCA) ====================
+#     def _find_foot_contour(self, mask: np.ndarray) -> Optional[np.ndarray]:
+#         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+#         if not cnts: return None
+#         return max(cnts, key=cv2.contourArea) # Return largest object
+
+#     def _align_foot(self, mask: np.ndarray) -> Tuple[np.ndarray, float]:
+#         # หาแกนหลักของเท้าแล้วหมุนให้ตั้งตรง
+#         contour = self._find_foot_contour(mask)
+#         if contour is None or len(contour) < 5: return mask, 0.0
+
+#         pts = contour.reshape(-1, 2).astype(np.float64)
+#         mean, eigenvectors = cv2.PCACompute(pts, mean=None)[:2]
+        
+#         # คำนวณองศาจาก eigenvector
+#         angle = np.arctan2(eigenvectors[0, 1], eigenvectors[0, 0]) * 180 / np.pi
+        
+#         # ปรับให้หมุนเข้าหาแกนตั้ง (90 องศา)
+#         if angle < 0: angle += 180
+#         rotation = angle - 90
+        
+#         # หมุนภาพ
+#         h, w = mask.shape[:2]
+#         center = (int(mean[0,0]), int(mean[0,1]))
+#         M = cv2.getRotationMatrix2D(center, rotation, 1.0)
+        
+#         # ปรับขนาดภาพหลังหมุนไม่ให้ขอบขาด
+#         cos, sin = np.abs(M[0, 0]), np.abs(M[0, 1])
+#         nW = int(h * sin + w * cos)
+#         nH = int(h * cos + w * sin)
+#         M[0, 2] += (nW / 2) - center[0]
+#         M[1, 2] += (nH / 2) - center[1]
+        
+#         aligned = cv2.warpAffine(mask, M, (nW, nH), flags=cv2.INTER_NEAREST)
+#         return aligned, rotation
+
+#     # ==================== 3. ROBUST MEASUREMENT ====================
+#     def _get_robust_width(self, region: np.ndarray) -> int:
+#         """ วัดความกว้างโดยตัด Noise ทิ้ง (ใช้ Percentile 98) """
+#         if region.size == 0: return 1
+        
+#         widths = []
+#         for row in region:
+#             pixels = np.where(row > 0)[0]
+#             if len(pixels) > 0:
+#                 widths.append(pixels[-1] - pixels[0])
+        
+#         if not widths: return 1
+        
+#         # เทคนิคสำคัญ: ใช้ Percentile แทน Max เพื่อแก้ปัญหาจุด Pixel ขยะที่ลอยๆ อยู่
+#         return int(np.percentile(widths, self.config.WIDTH_PERCENTILE))
+
+#     # ==================== 4. ANALYSIS & METRICS ====================
+#     def _analyze_arch(self, mask: np.ndarray) -> Dict[str, Any]:
+#         h, w = mask.shape[:2]
+        
+#         # หาขอบเขตบนล่างของเท้า
+#         y_pixels = np.where(mask > 0)[0]
+#         if len(y_pixels) == 0: return None
+        
+#         top, bottom = np.min(y_pixels), np.max(y_pixels)
+#         foot_len = bottom - top
+        
+#         # แบ่งโซน (Standard Staheli Zones)
+#         # Forefoot: 0-35% | Midfoot: 35-65% | Heel: 65-100%
+#         fore_end = top + int(foot_len * 0.35)
+#         mid_start = top + int(foot_len * 0.35)
+#         mid_end = top + int(foot_len * 0.65)
+#         heel_start = top + int(foot_len * 0.70) # Heel เริ่มที่ 70% เพื่อความชัวร์
+        
+#         # วัดความกว้าง
+#         fw = self._get_robust_width(mask[top:fore_end, :])
+#         mw = self._get_robust_width(mask[mid_start:mid_end, :])
+#         hw = self._get_robust_width(mask[heel_start:bottom, :])
+        
+#         # คำนวณ Indices
+#         staheli_index = mw / hw if hw > 0 else 0
+#         chippaux_index = mw / fw if fw > 0 else 0
+        
+#         # ตัดสินผล (Logic Combine)
+#         if staheli_index > self.config.TH_FLAT:
+#             atype = ArchType.FLAT
+#         elif staheli_index < self.config.TH_HIGH:
+#             atype = ArchType.HIGH
+#         else:
+#             atype = ArchType.NORMAL
+            
+#         return {
+#             "si": staheli_index,
+#             "csi": chippaux_index,
+#             "fw": fw, "mw": mw, "hw": hw,
+#             "type": atype
+#         }
+
+#     # ==================== 5. SIDE DETECTION ====================
+#     def _detect_side(self, mask: np.ndarray) -> str:
+#         """ วิเคราะห์ข้างเท้าจากส่วนเว้า (Arch Void Analysis) """
+#         try:
+#             h, w = mask.shape[:2]
+#             y_indices = np.where(mask > 0)[0]
+#             if len(y_indices) == 0: return "unknown"
+            
+#             # ตัดเฉพาะส่วนกลางเท้า (ที่ส่วนเว้าชัดสุด)
+#             top, bottom = np.min(y_indices), np.max(y_indices)
+#             mid_slice = mask[int(top + (bottom-top)*0.3) : int(top + (bottom-top)*0.7), :]
+            
+#             # คำนวณพื้นที่ว่าง (Void) ด้านซ้าย vs ขวา
+#             left_void = 0
+#             right_void = 0
+            
+#             for row in mid_slice[::5]: # Scan every 5th row
+#                 pixels = np.where(row > 0)[0]
+#                 if len(pixels) > 0:
+#                     left_void += pixels[0]          # ระยะจากขอบซ้ายถึงเนื้อเท้า
+#                     right_void += (w - pixels[-1])  # ระยะจากขอบขวาถึงเนื้อเท้า
+            
+#             # ถ้าพื้นที่ว่างด้านขวาเยอะกว่า -> อุ้งเท้าอยู่ขวา -> เท้าซ้าย
+#             # ถ้าพื้นที่ว่างด้านซ้ายเยอะกว่า -> อุ้งเท้าอยู่ซ้าย -> เท้าขวา
+#             return "left" if right_void > left_void else "right"
+            
+#         except:
+#             return "unknown"
+
+#     # ==================== PUBLIC API ====================
+#     def analyze_foot_structure(self, images: List[bytes]) -> Dict[str, Any]:
+#         best_res = None
+#         best_conf = -1
+        
+#         for img_bytes in images:
+#             try:
+#                 # Decode
+#                 nparr = np.frombuffer(img_bytes, np.uint8)
+#                 img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+#                 if img is None: continue
+                
+#                 # 1. AI Segment
+#                 _, mask = self._preprocess_image(img)
+                
+#                 # 2. Auto Align
+#                 mask_aligned, rot = self._align_foot(mask)
+                
+#                 # 3. Analyze
+#                 res = self._analyze_arch(mask_aligned)
+#                 if not res: continue
+                
+#                 # 4. Detect Side
+#                 side = self._detect_side(mask_aligned)
+                
+#                 # 5. Calculate Confidence
+#                 conf = 0.95 if self.model else 0.70
+#                 if abs(rot) > 40: conf -= 0.2 # หักคะแนนถ้าภาพเอียงมาก
+#                 if res['mw'] < 10: conf -= 0.3 # หักคะแนนถ้า mask เล็กเกินไป
+
+#                 if conf > best_conf:
+#                     best_conf = conf
+#                     best_res = {
+#                         'arch_type': ARCH_TYPE_THAI[res['type'].value],
+#                         'arch_type_en': res['type'].value,
+#                         'detected_side': side,
+#                         'staheli_index': float(res['si']),
+#                         'chippaux_index': float(res['csi']),
+#                         'confidence': round(conf, 2),
+#                         'measurements': {
+#                             'forefoot_width_px': int(res['fw']),
+#                             'midfoot_width_px': int(res['mw']),
+#                             'heel_width_px': int(res['hw']),
+#                             'rotation_degrees': int(rot)
+#                         },
+#                         'method': 'AI_Master_v4.0'
+#                     }
+#             except Exception as e:
+#                 logger.error(f"Processing error: {e}")
+#                 continue
+
+#         if best_res:
+#             return best_res
+#         else:
+#             raise ValueError("Could not analyze foot structure.")
+
+#     # ==================== RISK ASSESSMENT (คงเดิม) ====================
+#     def assess_plantar_fasciitis(self, foot_analysis: Dict, questionnaire_score: float = 0.0, 
+#                                 bmi_score: float = 0.0, age: int = 0, activity_level: str = "moderate") -> Dict:
+        
+#         arch = foot_analysis.get('arch_type', 'ปกติ')
+        
+#         # Risk Calculation
+#         arch_risk = 25 if arch in ['เท้าแบน', 'อุ้งเท้าสูงมาก'] else (15 if arch == 'อุ้งเท้าสูง' else 5)
+#         bmi_risk = 20 if bmi_score >= 30 else (10 if bmi_score >= 25 else 0)
+#         age_risk = 10 if 40 <= age <= 60 else (5 if age > 60 else 0)
+#         quiz_risk = questionnaire_score * 0.40
+#         act_risk = 15 if activity_level == 'high' else 5
+        
+#         total = min(100, arch_risk + bmi_risk + age_risk + quiz_risk + act_risk)
+        
+#         if total < 30: sev, sev_th = "low", "ต่ำ"
+#         elif total < 60: sev, sev_th = "medium", "ปานกลาง"
+#         else: sev, sev_th = "high", "สูง"
+        
+#         return {
+#             'severity': sev, 'severity_thai': sev_th, 'score': round(total, 1),
+#             'arch_type': arch,
+#             'recommendations': self._get_recs(sev, arch, bmi_score)
+#         }
+
+#     def _get_recs(self, sev, arch, bmi):
+#         recs = []
+#         if 'เท้าแบน' in arch: recs.append("ใช้รองเท้าที่มี Arch Support")
+#         elif 'อุ้งเท้าสูง' in arch: recs.append("ใช้รองเท้าพื้นนุ่ม (Cushioning)")
+#         if bmi >= 25: recs.append("ควรควบคุมน้ำหนัก")
+#         recs.append("ยืดเหยียดเอ็นร้อยหวายทุกวัน")
+#         if sev == "high": recs.append("ควรพบแพทย์เพื่อตรวจละเอียด")
+#         return recs
+
 """
-Medical-Grade Plantar Fasciitis Analyzer (Master Edition)
-Version: 4.0 - High Precision, Dual-Index Metric, Auto-Side Detection
+Medical-Grade Plantar Fasciitis Analyzer (Final Realism V5.0)
+Feature: TTA (Test-Time Augmentation) + BMI Adaptive Thresholds
 """
 
 import numpy as np
@@ -509,7 +820,6 @@ class ArchType(Enum):
     NORMAL = "normal"
     FLAT = "flat_foot"
 
-# Mapping ภาษาไทย
 ARCH_TYPE_THAI = {
     "severe_high_arch": "อุ้งเท้าสูงมาก",
     "high_arch": "อุ้งเท้าสูง",
@@ -521,12 +831,6 @@ ARCH_TYPE_THAI = {
 class ProcessingConfig:
     TARGET_HEIGHT: int = 800
     AI_INPUT_SIZE: Tuple[int, int] = (256, 256)
-    
-    # เกณฑ์การตัดสิน (Thresholds) - ปรับจูนสำหรับ AI Mask
-    TH_FLAT: float = 0.85      # เกินนี้คือเท้าแบน
-    TH_HIGH: float = 0.35      # ต่ำกว่านี้คืออุ้งเท้าสูง
-    
-    # การวัดความกว้าง (ใช้ Percentile เพื่อตัด Noise)
     WIDTH_PERCENTILE: int = 98 
 
 # ==================== MAIN ANALYZER CLASS ====================
@@ -534,82 +838,98 @@ class ProcessingConfig:
 class PlantarFasciitisAnalyzer:
     def __init__(self):
         self.config = ProcessingConfig()
-        
-        # --- Load AI Model ---
         self.model = None
         try:
             current_dir = os.path.dirname(__file__)
             model_path = os.path.join(current_dir, "foot_segmentation_model.h5")
             if os.path.exists(model_path):
                 self.model = tf.keras.models.load_model(model_path)
-                logger.info(f"🧠 Master AI Model loaded: {model_path}")
+                logger.info(f"🧠 AI Model Loaded: {model_path}")
             else:
-                logger.warning("⚠️ Model not found. Accuracy will be degraded (Fallback mode).")
+                logger.warning("⚠️ AI Model not found.")
         except Exception as e:
-            logger.error(f"❌ AI Model Load Error: {e}")
+            logger.error(f"❌ AI Load Error: {e}")
 
-    # ==================== 1. PREPROCESSING (AI) ====================
+    # ==================== 1. SMART PREPROCESSING (TTA) ====================
+    
+    def _predict_with_tta(self, img: np.ndarray) -> np.ndarray:
+        """
+        Test-Time Augmentation: ให้ AI ดูภาพ 3 แบบแล้วเอาผลมาเฉลี่ยกัน
+        เพื่อลดความผิดพลาดและทำให้ขอบเนียนขึ้น
+        """
+        # เตรียมภาพ input
+        img_resized = cv2.resize(img, self.config.AI_INPUT_SIZE)
+        img_resized = img_resized / 255.0
+        
+        # สร้าง Batch 3 ภาพ: [ปกติ, กลับซ้ายขวา, กลับบนล่าง]
+        batch = np.zeros((3, 256, 256, 3), dtype=np.float32)
+        batch[0] = img_resized
+        batch[1] = cv2.flip(img_resized, 1) # Flip Horizontal
+        batch[2] = cv2.flip(img_resized, 0) # Flip Vertical
+        
+        # ให้ AI ทำนายทีเดียว 3 ภาพ
+        preds = self.model.predict(batch, verbose=0) # shape (3, 256, 256, 1)
+        
+        # ย้อนกลับภาพให้เป็นทิศเดิม
+        p0 = preds[0, :, :, 0]
+        p1 = cv2.flip(preds[1, :, :, 0], 1)
+        p2 = cv2.flip(preds[2, :, :, 0], 0)
+        
+        # เฉลี่ยผลลัพธ์ (Average Ensemble)
+        avg_pred = (p0 + p1 + p2) / 3.0
+        
+        return avg_pred
+
     def _preprocess_image(self, img: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        # Resize for display/processing
         h, w = img.shape[:2]
         scale = self.config.TARGET_HEIGHT / h
         img_display = cv2.resize(img, (int(w * scale), self.config.TARGET_HEIGHT), interpolation=cv2.INTER_AREA)
 
         if self.model:
             try:
-                # Prepare for AI
-                img_ai = cv2.resize(img, self.config.AI_INPUT_SIZE)
-                img_ai = img_ai / 255.0
-                img_ai = np.expand_dims(img_ai, axis=0)
+                # ใช้ TTA แทนการ predict ครั้งเดียว
+                pred_map = self._predict_with_tta(img)
+                
+                # Threshold ตัดที่ความมั่นใจ 0.5
+                mask = (pred_map > 0.5).astype(np.uint8) * 255
 
-                # Predict
-                pred = self.model.predict(img_ai, verbose=0)
-                mask = (pred[0, :, :, 0] > 0.5).astype(np.uint8) * 255
-
-                # Resize mask back
+                # Resize กลับเท่าภาพ display
                 mask_resized = cv2.resize(mask, (img_display.shape[1], img_display.shape[0]), interpolation=cv2.INTER_NEAREST)
                 
-                # Clean Noise (Morphology)
+                # ลบ Noise เล็กๆ
                 kernel = np.ones((5,5), np.uint8)
                 mask_cleaned = cv2.morphologyEx(mask_resized, cv2.MORPH_OPEN, kernel)
-                
                 return img_display, mask_cleaned
             except Exception as e:
-                logger.error(f"AI Error: {e}")
+                logger.error(f"AI TTA Error: {e}")
 
-        # Fallback (Otsu)
+        # Fallback
         gray = cv2.cvtColor(img_display, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5,5), 0)
         _, mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return img_display, mask
 
-    # ==================== 2. ALIGNMENT (PCA) ====================
+    # ==================== 2. ALIGNMENT & MEASUREMENT ====================
+    # (ส่วนนี้เหมือนเดิม ใช้ V4.0 ได้เลย)
+    
     def _find_foot_contour(self, mask: np.ndarray) -> Optional[np.ndarray]:
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not cnts: return None
-        return max(cnts, key=cv2.contourArea) # Return largest object
+        return max(cnts, key=cv2.contourArea)
 
     def _align_foot(self, mask: np.ndarray) -> Tuple[np.ndarray, float]:
-        # หาแกนหลักของเท้าแล้วหมุนให้ตั้งตรง
         contour = self._find_foot_contour(mask)
         if contour is None or len(contour) < 5: return mask, 0.0
 
         pts = contour.reshape(-1, 2).astype(np.float64)
         mean, eigenvectors = cv2.PCACompute(pts, mean=None)[:2]
-        
-        # คำนวณองศาจาก eigenvector
         angle = np.arctan2(eigenvectors[0, 1], eigenvectors[0, 0]) * 180 / np.pi
-        
-        # ปรับให้หมุนเข้าหาแกนตั้ง (90 องศา)
         if angle < 0: angle += 180
         rotation = angle - 90
         
-        # หมุนภาพ
         h, w = mask.shape[:2]
         center = (int(mean[0,0]), int(mean[0,1]))
         M = cv2.getRotationMatrix2D(center, rotation, 1.0)
-        
-        # ปรับขนาดภาพหลังหมุนไม่ให้ขอบขาด
         cos, sin = np.abs(M[0, 0]), np.abs(M[0, 1])
         nW = int(h * sin + w * cos)
         nH = int(h * cos + w * sin)
@@ -619,122 +939,123 @@ class PlantarFasciitisAnalyzer:
         aligned = cv2.warpAffine(mask, M, (nW, nH), flags=cv2.INTER_NEAREST)
         return aligned, rotation
 
-    # ==================== 3. ROBUST MEASUREMENT ====================
     def _get_robust_width(self, region: np.ndarray) -> int:
-        """ วัดความกว้างโดยตัด Noise ทิ้ง (ใช้ Percentile 98) """
         if region.size == 0: return 1
-        
         widths = []
         for row in region:
             pixels = np.where(row > 0)[0]
             if len(pixels) > 0:
                 widths.append(pixels[-1] - pixels[0])
-        
         if not widths: return 1
-        
-        # เทคนิคสำคัญ: ใช้ Percentile แทน Max เพื่อแก้ปัญหาจุด Pixel ขยะที่ลอยๆ อยู่
         return int(np.percentile(widths, self.config.WIDTH_PERCENTILE))
 
-    # ==================== 4. ANALYSIS & METRICS ====================
-    def _analyze_arch(self, mask: np.ndarray) -> Dict[str, Any]:
-        h, w = mask.shape[:2]
+    # ==================== 3. ADAPTIVE ANALYSIS (BMI Logic) ====================
+    
+    def _classify_arch_adaptive(self, si: float, bmi: float) -> ArchType:
+        """
+        ปรับเกณฑ์การตัดสินตามค่า BMI (ความจริงทางสรีระ)
+        """
+        # Base Thresholds (สำหรับคนหุ่นปกติ)
+        th_flat = 0.85
+        th_high = 0.35
         
-        # หาขอบเขตบนล่างของเท้า
+        # Adaptive Logic:
+        # ยิ่งอ้วน เท้าจะยิ่งดูกว้างโดยธรรมชาติ เราจึงต้องผ่อนเกณฑ์ Flat ให้สูงขึ้น
+        # ไม่งั้นคนอ้วนทุกคนจะถูกเหมาว่าเป็นเท้าแบนหมด
+        if bmi >= 35:
+            th_flat = 0.95 # อ้วนมาก: ต้องกว้างจริงๆ ถึงจะเรียกแบน
+        elif bmi >= 30:
+            th_flat = 0.92 # อ้วน
+        elif bmi >= 25:
+            th_flat = 0.88 # ท้วม
+            
+        # การตัดสิน
+        if si > th_flat:
+            return ArchType.FLAT
+        elif si < th_high:
+            return ArchType.HIGH
+        else:
+            return ArchType.NORMAL
+
+    def _analyze_arch(self, mask: np.ndarray, bmi: float) -> Dict[str, Any]:
+        h, w = mask.shape[:2]
         y_pixels = np.where(mask > 0)[0]
         if len(y_pixels) == 0: return None
         
         top, bottom = np.min(y_pixels), np.max(y_pixels)
         foot_len = bottom - top
         
-        # แบ่งโซน (Standard Staheli Zones)
-        # Forefoot: 0-35% | Midfoot: 35-65% | Heel: 65-100%
         fore_end = top + int(foot_len * 0.35)
         mid_start = top + int(foot_len * 0.35)
         mid_end = top + int(foot_len * 0.65)
-        heel_start = top + int(foot_len * 0.70) # Heel เริ่มที่ 70% เพื่อความชัวร์
+        heel_start = top + int(foot_len * 0.70)
         
-        # วัดความกว้าง
         fw = self._get_robust_width(mask[top:fore_end, :])
         mw = self._get_robust_width(mask[mid_start:mid_end, :])
         hw = self._get_robust_width(mask[heel_start:bottom, :])
         
-        # คำนวณ Indices
         staheli_index = mw / hw if hw > 0 else 0
         chippaux_index = mw / fw if fw > 0 else 0
         
-        # ตัดสินผล (Logic Combine)
-        if staheli_index > self.config.TH_FLAT:
-            atype = ArchType.FLAT
-        elif staheli_index < self.config.TH_HIGH:
-            atype = ArchType.HIGH
-        else:
-            atype = ArchType.NORMAL
+        # ✅ เรียกใช้ Adaptive Classification
+        atype = self._classify_arch_adaptive(staheli_index, bmi)
             
         return {
-            "si": staheli_index,
-            "csi": chippaux_index,
-            "fw": fw, "mw": mw, "hw": hw,
-            "type": atype
+            "si": staheli_index, "csi": chippaux_index,
+            "fw": fw, "mw": mw, "hw": hw, "type": atype
         }
 
-    # ==================== 5. SIDE DETECTION ====================
+    # ==================== 4. SIDE DETECTION ====================
     def _detect_side(self, mask: np.ndarray) -> str:
-        """ วิเคราะห์ข้างเท้าจากส่วนเว้า (Arch Void Analysis) """
         try:
             h, w = mask.shape[:2]
             y_indices = np.where(mask > 0)[0]
             if len(y_indices) == 0: return "unknown"
             
-            # ตัดเฉพาะส่วนกลางเท้า (ที่ส่วนเว้าชัดสุด)
             top, bottom = np.min(y_indices), np.max(y_indices)
             mid_slice = mask[int(top + (bottom-top)*0.3) : int(top + (bottom-top)*0.7), :]
             
-            # คำนวณพื้นที่ว่าง (Void) ด้านซ้าย vs ขวา
-            left_void = 0
-            right_void = 0
-            
-            for row in mid_slice[::5]: # Scan every 5th row
+            left_void, right_void = 0, 0
+            for row in mid_slice[::5]:
                 pixels = np.where(row > 0)[0]
                 if len(pixels) > 0:
-                    left_void += pixels[0]          # ระยะจากขอบซ้ายถึงเนื้อเท้า
-                    right_void += (w - pixels[-1])  # ระยะจากขอบขวาถึงเนื้อเท้า
+                    left_void += pixels[0]
+                    right_void += (w - pixels[-1])
             
-            # ถ้าพื้นที่ว่างด้านขวาเยอะกว่า -> อุ้งเท้าอยู่ขวา -> เท้าซ้าย
-            # ถ้าพื้นที่ว่างด้านซ้ายเยอะกว่า -> อุ้งเท้าอยู่ซ้าย -> เท้าขวา
             return "left" if right_void > left_void else "right"
-            
         except:
             return "unknown"
 
-    # ==================== PUBLIC API ====================
-    def analyze_foot_structure(self, images: List[bytes]) -> Dict[str, Any]:
+    # ==================== PUBLIC API (Update parameter to accept BMI) ====================
+    
+    # ⚠️ หมายเหตุ: API ต้องรับค่า BMI เข้ามาด้วย ถ้าไม่มีให้ default = 22 (ปกติ)
+    def analyze_foot_structure(self, images: List[bytes], user_bmi: float = 22.0) -> Dict[str, Any]:
         best_res = None
         best_conf = -1
         
         for img_bytes in images:
             try:
-                # Decode
                 nparr = np.frombuffer(img_bytes, np.uint8)
                 img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 if img is None: continue
                 
-                # 1. AI Segment
+                # 1. AI Segment (with TTA)
                 _, mask = self._preprocess_image(img)
                 
-                # 2. Auto Align
+                # 2. Align
                 mask_aligned, rot = self._align_foot(mask)
                 
-                # 3. Analyze
-                res = self._analyze_arch(mask_aligned)
+                # 3. Analyze (with BMI Adaptive)
+                res = self._analyze_arch(mask_aligned, user_bmi)
                 if not res: continue
                 
-                # 4. Detect Side
+                # 4. Side
                 side = self._detect_side(mask_aligned)
                 
-                # 5. Calculate Confidence
+                # 5. Conf
                 conf = 0.95 if self.model else 0.70
-                if abs(rot) > 40: conf -= 0.2 # หักคะแนนถ้าภาพเอียงมาก
-                if res['mw'] < 10: conf -= 0.3 # หักคะแนนถ้า mask เล็กเกินไป
+                if abs(rot) > 40: conf -= 0.2
+                if res['mw'] < 10: conf -= 0.3
 
                 if conf > best_conf:
                     best_conf = conf
@@ -751,7 +1072,7 @@ class PlantarFasciitisAnalyzer:
                             'heel_width_px': int(res['hw']),
                             'rotation_degrees': int(rot)
                         },
-                        'method': 'AI_Master_v4.0'
+                        'method': 'AI_Realism_V5.0'
                     }
             except Exception as e:
                 logger.error(f"Processing error: {e}")
@@ -781,9 +1102,15 @@ class PlantarFasciitisAnalyzer:
         elif total < 60: sev, sev_th = "medium", "ปานกลาง"
         else: sev, sev_th = "high", "สูง"
         
+        risk_factors = []
+        if bmi_score >= 25: risk_factors.append(f"น้ำหนักเกินเกณฑ์ (BMI {bmi_score:.1f})")
+        if arch != 'ปกติ': risk_factors.append(f"รูปเท้าผิดปกติ ({arch})")
+        if 40 <= age <= 60: risk_factors.append("ช่วงอายุมีความเสี่ยง")
+        
         return {
             'severity': sev, 'severity_thai': sev_th, 'score': round(total, 1),
             'arch_type': arch,
+            'risk_factors': risk_factors,
             'recommendations': self._get_recs(sev, arch, bmi_score)
         }
 

@@ -16,7 +16,6 @@ from dotenv import load_dotenv
 # Import services
 from services.pf_analyzer import PlantarFasciitisAnalyzer
 from services.exercise_recommender import ExerciseRecommender
-# ✅ แก้ไข 1: Import PFShoeMatcher และเปลี่ยนชื่อเล่นเป็น ShoeMatcher เพื่อให้โค้ดด้านล่างไม่ต้องแก้เยอะ
 from services.matcher import PFShoeMatcher as ShoeMatcher
 from services.storage import SupabaseStorage
 from services.processor import ImageProcessor
@@ -58,6 +57,7 @@ async def lifespan(app: FastAPI):
     if SUPABASE_URL and SUPABASE_KEY:
         storage = SupabaseStorage(SUPABASE_URL, SUPABASE_KEY)
     
+    # Initialize Analyzer (V5.0 loaded internally)
     analyzer = PlantarFasciitisAnalyzer()
     exercise_recommender = ExerciseRecommender()
     
@@ -191,8 +191,9 @@ async def process_pf_assessment(
         # 1. Download images
         images = await processor.download_images(image_urls)
         
-        # 2. Analyze foot structure
-        foot_analysis = analyzer.analyze_foot_structure(images)
+        # 2. Analyze foot structure (WITH BMI for Adaptive Threshold)
+        # ✅ แก้ไขจุดสำคัญ: ส่ง bmi_score เข้าไปด้วย
+        foot_analysis = analyzer.analyze_foot_structure(images, user_bmi=bmi_score)
         
         # 3. Assess PF Risk
         pf_assessment = analyzer.assess_plantar_fasciitis(
@@ -210,10 +211,7 @@ async def process_pf_assessment(
             exercises = []
             
         try:
-            # ใช้งาน ShoeMatcher (PFShoeMatcher)
             if shoe_matcher:
-                # ตรวจสอบว่าฟังก์ชัน find_pf_shoes เป็น async หรือไม่
-                # จากไฟล์ matcher.py ที่ส่งมาเป็น async def find_pf_shoes
                 shoes = await shoe_matcher.find_pf_shoes(scan_id, pf_assessment)
             else:
                 shoes = []
@@ -223,14 +221,13 @@ async def process_pf_assessment(
 
         # 5. Save ALL Results
         if storage:
-            # ✅ แก้ไข 2: ลบ model_url ออกจากการเรียกใช้
             await storage.update_scan_analysis(
                 scan_id=scan_id,
                 foot_analysis=foot_analysis,
                 pf_assessment=pf_assessment,
                 exercises=exercises,
                 shoes=shoes,
-                foot_side=foot_analysis.get("detected_side")
+                foot_side=foot_analysis.get("detected_side") # ส่งข้างเท้าไปบันทึก
             )
         
         logger.info(f"✅ PF assessment completed successfully for {scan_id}")
