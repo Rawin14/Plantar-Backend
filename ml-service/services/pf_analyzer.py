@@ -386,7 +386,7 @@ class PlantarFasciitisAnalyzer:
                     best_result = analysis
                     best_result['confidence'] = conf
                     best_result['rotation'] = rot
-                    best_result['detected_side'] = self._detect_side(contour_align, img_align.shape[1])
+                    best_result['detected_side'] = self._detect_side(img_align)
 
             except Exception as e:
                 logger.error(f"Error processing image {i}: {e}")
