@@ -270,31 +270,70 @@ class PlantarFasciitisAnalyzer:
         else:
             return ArchType.FLAT
     
-    def _detect_side(self, contour: np.ndarray, width: int) -> str:
+    def _detect_side(self, mask: np.ndarray) -> str:
         """
-        เดาข้างเท้าจากจุดศูนย์ถ่วง (Center of Mass)
-        หลังจากหมุนภาพให้ตั้งตรงแล้ว:
-        - เท้าซ้าย: นิ้วโป้งจะชี้ไปทางขวา (ของภาพ) -> จุดศูนย์ถ่วงมักจะเยื้องไปทางขวา
-        - เท้าขวา: นิ้วโป้งจะชี้ไปทางซ้าย (ของภาพ) -> จุดศูนย์ถ่วงมักจะเยื้องไปทางซ้าย
-        (หมายเหตุ: ขึ้นอยู่กับว่า User ถ่ายรูปมาแบบไหน Logic นี้อาจสลับกันได้ตามการวางเท้า)
+        วิเคราะห์ข้างเท้า (ซ้าย/ขวา) จากส่วนเว้าของอุ้งเท้า (Arch Location)
+        Logic:
+        1. ตรวจสอบว่าภาพกลับหัวหรือไม่ (ส้นเท้าควรอยู่ล่าง)
+        2. เปรียบเทียบพื้นที่ว่าง (Void) ด้านซ้าย vs ขวา ในช่วงกลางเท้า
+        3. ด้านที่มีพื้นที่ว่างมากกว่า คือด้านที่มีอุ้งเท้า
+           - เท้าซ้าย: อุ้งเท้าอยู่ขวา
+           - เท้าขวา: อุ้งเท้าอยู่ซ้าย
         """
         try:
-            M = cv2.moments(contour)
-            if M["m00"] == 0: return "unknown"
+            h, w = mask.shape[:2]
             
-            # หาจุดศูนย์ถ่วงแกน X (cx)
-            cx = int(M["m10"] / M["m00"])
-            center_line = width // 2
+            # --- 1. ตรวจสอบทิศทาง (Toes Up or Down?) ---
+            # เปรียบเทียบความกว้างของส่วนบน (30%) และส่วนล่าง (30%)
+            top_part = mask[:int(h*0.3), :]
+            bottom_part = mask[int(h*0.7):, :]
             
-            # Logic: เท้าส่วนใหญ่ส่วนโค้งเว้าจะอยู่ด้านใน
-            # ถ้า Convex Hull (เส้นรอบนอก) มีพื้นที่ว่างฝั่งซ้ายเยอะกว่า = เท้าซ้าย?
-            # วิธีที่ง่ายกว่า: เช็คว่า "ส้นเท้า" เอียงไปทางไหน (หลังจาก Align แล้ว)
+            top_width = self._get_max_width(top_part)
+            bottom_width = self._get_max_width(bottom_part)
             
-            # แต่เพื่อความปลอดภัย ถ้าไม่ชัวร์ให้ User เลือกเองในแอปดีกว่า
-            # คืนค่า unknown ไปก่อนเพื่อให้ Frontend บังคับ User เลือก
-            return "unknown" 
+            # ปกติส่วนนิ้ว (Forefoot) จะกว้างกว่าส้นเท้า (Heel)
+            # ถ้าข้างล่างกว้างกว่าข้างบน แสดงว่าภาพกลับหัว (นิ้วอยู่ล่าง)
+            is_upside_down = bottom_width > top_width
             
-        except Exception:
+            # --- 2. วิเคราะห์ส่วนเว้า (Arch Analysis) ---
+            # ดูเฉพาะช่วงกลางเท้า (Midfoot) ประมาณ 30-70% ของความสูง
+            mid_start = int(h * 0.35)
+            mid_end = int(h * 0.65)
+            
+            left_void_score = 0
+            right_void_score = 0
+            
+            # สแกนทีละแถวในช่วงกลางเท้า
+            for y in range(mid_start, mid_end, 5): # ข้ามทีละ 5 pixel เพื่อความเร็ว
+                row = mask[y, :]
+                pixels = np.where(row > 0)[0]
+                
+                if len(pixels) > 0:
+                    first_pixel = pixels[0]
+                    last_pixel = pixels[-1]
+                    
+                    # คำนวณระยะห่างจากขอบภาพถึงเนื้อเท้า
+                    dist_from_left = first_pixel      # ระยะจากขอบซ้าย
+                    dist_from_right = w - last_pixel  # ระยะจากขอบขวา
+                    
+                    left_void_score += dist_from_left
+                    right_void_score += dist_from_right
+            
+            # --- 3. ตัดสินผล (Decision) ---
+            # ด้านที่มี Void Score มากกว่า คือด้านที่เป็นอุ้งเท้า (ส่วนเว้า)
+            arch_is_on_right = right_void_score > left_void_score
+            
+            if not is_upside_down: # กรณีเท้าวางปกติ (นิ้วชี้ขึ้นฟ้า)
+                # เท้าซ้าย -> อุ้งเท้าอยู่ขวา
+                # เท้าขวา -> อุ้งเท้าอยู่ซ้าย
+                return "left" if arch_is_on_right else "right"
+            else: # กรณีเท้ากลับหัว (นิ้วชี้ลงดิน)
+                # เท้าซ้าย(กลับหัว) -> อุ้งเท้าอยู่ซ้าย
+                # เท้าขวา(กลับหัว) -> อุ้งเท้าอยู่ขวา
+                return "right" if arch_is_on_right else "left"
+                
+        except Exception as e:
+            logger.error(f"Error detecting side: {e}")
             return "unknown"
 
     # ==================== MAIN API FUNCTION ====================
