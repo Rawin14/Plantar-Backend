@@ -271,13 +271,31 @@ class PlantarFasciitisAnalyzer:
             return ArchType.FLAT
     
     def _detect_side(self, contour: np.ndarray, width: int) -> str:
-        # ใช้โมเมนต์หาจุดศูนย์ถ่วงเทียบกับแกนกลาง
-        M = cv2.moments(contour)
-        if M["m00"] == 0: return "unknown"
-        cx = int(M["m10"] / M["m00"])
-        # ถ้าจุดศูนย์ถ่วงอยู่ซ้ายของภาพ -> เท้าซ้าย? (ต้องระวังเรื่องการวางเท้า)
-        # AI รุ่นนี้ยังไม่ได้เทรนแยกข้าง ให้ return unknown หรือเดาไปก่อน
-        return "unknown" 
+        """
+        เดาข้างเท้าจากจุดศูนย์ถ่วง (Center of Mass)
+        หลังจากหมุนภาพให้ตั้งตรงแล้ว:
+        - เท้าซ้าย: นิ้วโป้งจะชี้ไปทางขวา (ของภาพ) -> จุดศูนย์ถ่วงมักจะเยื้องไปทางขวา
+        - เท้าขวา: นิ้วโป้งจะชี้ไปทางซ้าย (ของภาพ) -> จุดศูนย์ถ่วงมักจะเยื้องไปทางซ้าย
+        (หมายเหตุ: ขึ้นอยู่กับว่า User ถ่ายรูปมาแบบไหน Logic นี้อาจสลับกันได้ตามการวางเท้า)
+        """
+        try:
+            M = cv2.moments(contour)
+            if M["m00"] == 0: return "unknown"
+            
+            # หาจุดศูนย์ถ่วงแกน X (cx)
+            cx = int(M["m10"] / M["m00"])
+            center_line = width // 2
+            
+            # Logic: เท้าส่วนใหญ่ส่วนโค้งเว้าจะอยู่ด้านใน
+            # ถ้า Convex Hull (เส้นรอบนอก) มีพื้นที่ว่างฝั่งซ้ายเยอะกว่า = เท้าซ้าย?
+            # วิธีที่ง่ายกว่า: เช็คว่า "ส้นเท้า" เอียงไปทางไหน (หลังจาก Align แล้ว)
+            
+            # แต่เพื่อความปลอดภัย ถ้าไม่ชัวร์ให้ User เลือกเองในแอปดีกว่า
+            # คืนค่า unknown ไปก่อนเพื่อให้ Frontend บังคับ User เลือก
+            return "unknown" 
+            
+        except Exception:
+            return "unknown"
 
     # ==================== MAIN API FUNCTION ====================
     
@@ -339,9 +357,17 @@ class PlantarFasciitisAnalyzer:
             return {
                 'arch_type': best_result['arch_type_thai'],
                 'arch_type_en': best_result['arch_type_enum'].value,
-                'detected_side': best_result['detected_side'],
+                'detected_side': best_result['detected_side'], 
                 'staheli_index': best_result['staheli_index'],
+                'chippaux_index': best_result.get('chippaux_index'), 
+                'arch_height_ratio': best_result['staheli_index'],   
                 'confidence': best_result['confidence'],
+                'measurements': {   
+                    'forefoot_width_px': best_result.get('forefoot_width_px', 0),
+                    'midfoot_width_px': best_result.get('midfoot_width_px', 0),
+                    'heel_width_px': best_result.get('heel_width_px', 0),
+                    'rotation_degrees': best_result.get('rotation', 0.0)
+                },
                 'method': 'AI_DeepLearning_v3.0' if self.model else 'Classic_Otsu'
             }
         else:
