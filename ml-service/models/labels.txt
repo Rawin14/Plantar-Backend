@@ -1,0 +1,1 @@
+{'flat': 0, 'high': 1, 'normal': 2}
