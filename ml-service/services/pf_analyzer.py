@@ -1128,50 +1128,81 @@ import numpy as np
 import cv2
 import os
 import ast
+import logging
 
-# 1. ตั้งค่า Path สำหรับโหลดโมเดล (ใช้ Path อ้างอิงจากตำแหน่งไฟล์ปัจจุบัน)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "models", "best_foot_model.h5")
-LABEL_PATH = os.path.join(BASE_DIR, "models", "labels.txt")
+logger = logging.getLogger(__name__)
 
-# 2. โหลดโมเดลไว้ตั้งแต่ตอนเปิดเซิร์ฟเวอร์ (จะได้ไม่ต้องโหลดใหม่ทุกครั้งที่สแกน)
-print("🧠 Loading AI Model...")
-model = tf.keras.models.load_model(MODEL_PATH)
+class PlantarFasciitisAnalyzer:
+    def __init__(self):
+        """
+        โหลดโมเดล AI ไว้ตั้งแต่ตอนเริ่ม Class (ตอนเปิดเซิร์ฟเวอร์)
+        """
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.model_path = os.path.join(BASE_DIR, "models", "best_foot_model.h5")
+        self.label_path = os.path.join(BASE_DIR, "models", "labels.txt")
+        
+        logger.info("🧠 Loading AI Model in PlantarFasciitisAnalyzer...")
+        try:
+            self.model = tf.keras.models.load_model(self.model_path)
+            with open(self.label_path, "r") as f:
+                labels_dict = ast.literal_eval(f.read())
+                # สลับเอาตัวเลขเป็น Key (เช่น 0: 'flat')
+                self.class_names = {v: k for k, v in labels_dict.items()}
+            logger.info("✅ AI Model Loaded Successfully!")
+        except Exception as e:
+            logger.error(f"❌ Failed to load model: {e}")
+            self.model = None
+            # Fallback ค่าเริ่มต้นเผื่อโหลดโมเดลไม่ขึ้น
+            self.class_names = {0: 'flat', 1: 'high', 2: 'normal'}
 
-with open(LABEL_PATH, "r") as f:
-    labels_dict = ast.literal_eval(f.read())
-    # สลับเอาตัวเลขเป็น Key (เช่น 0: 'flat')
-    class_names = {v: k for k, v in labels_dict.items()}
-print("✅ AI Model Loaded Successfully!")
+    def analyze_foot_structure(self, images, user_bmi=0.0):
+        """
+        รับรูปภาพมาประมวลผลด้วย AI MobileNetV2
+        (ตรงกับที่ main.py เรียกใช้ในบรรทัดที่ 127)
+        """
+        if not images:
+            raise ValueError("No images provided for analysis")
 
-def analyze_footprint(image_bytes: bytes):
-    """
-    ฟังก์ชันรับไฟล์รูปภาพดิบ (Bytes) นำมาให้ AI วิเคราะห์
-    และคืนค่าเป็นประเภทรอยเท้าและความเสี่ยง
-    """
-    try:
+        # main.py ส่งรูปมาเป็น List ของ Bytes, เราใช้รูปแรกในการวิเคราะห์
+        image_bytes = images[0]
+        
         # 1. แปลง Bytes เป็นรูปภาพด้วย OpenCV
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
         if img is None:
-            raise ValueError("ไม่สามารถอ่านไฟล์รูปภาพได้")
+            raise ValueError("Cannot read the image file")
 
-        # 2. เตรียมรูปภาพให้ตรงกับสเปคที่ AI ต้องการ (Pre-processing)
+        # 2. เตรียมรูปภาพให้ตรงกับสเปคที่ AI ต้องการ
         img_resized = cv2.resize(img, (224, 224))
-        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB) # AI เราเรียนมาแบบ RGB
-        img_normalized = img_rgb.astype(np.float32) / 255.0    # ปรับสเกลสี 0-1
-        img_batch = np.expand_dims(img_normalized, axis=0)     # เติมมิติให้เป็น Batch
+        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+        img_normalized = img_rgb.astype(np.float32) / 255.0
+        img_batch = np.expand_dims(img_normalized, axis=0)
 
         # 3. ให้ AI ทำนายผล (Predict)
-        predictions = model.predict(img_batch)[0]
-        best_class_idx = np.argmax(predictions)
+        if self.model:
+            predictions = self.model.predict(img_batch)[0]
+            best_class_idx = int(np.argmax(predictions))
+            arch_type = self.class_names.get(best_class_idx, "normal")
+            confidence = float(predictions[best_class_idx]) * 100
+        else:
+            arch_type = "normal"
+            confidence = 0.0
+
+        return {
+            "arch_type": arch_type,
+            "confidence_percent": round(confidence, 2),
+            "detected_side": "unknown" 
+        }
+
+    def assess_plantar_fasciitis(self, foot_analysis, questionnaire_score, bmi_score, age, activity_level):
+        """
+        ประเมินความเสี่ยงโรครองช้ำโดยเอาผลจาก AI มาคำนวณร่วมกับ BMI
+        (ตรงกับที่ main.py เรียกใช้ในบรรทัดที่ 130)
+        """
+        arch_type = foot_analysis.get("arch_type", "normal")
         
-        # 4. ดึงผลลัพธ์
-        arch_type = class_names[best_class_idx] # จะได้ 'flat', 'normal', หรือ 'high'
-        confidence = float(predictions[best_class_idx]) * 100 # เปอร์เซ็นต์ความมั่นใจ
-        
-        # 5. ประเมินความเสี่ยงโรครองช้ำเบื้องต้น (ผูก Logic สุขภาพ)
+        # กฎการประเมินความเสี่ยงเบื้องต้น
         if arch_type == "flat":
             risk_level = "High"
             recommendation = "คุณมีภาวะเท้าแบน เสี่ยงต่อโรครองช้ำ ควรใช้แผ่นรองเท้า"
@@ -1181,17 +1212,15 @@ def analyze_footprint(image_bytes: bytes):
         else:
             risk_level = "Low"
             recommendation = "อุ้งเท้าของคุณปกติ แนะนำให้ยืดเหยียดกล้ามเนื้อเป็นประจำ"
+            
+        # ถ้า BMI มากกว่า 25 (น้ำหนักเกิน) ให้เพิ่มระดับความเสี่ยง
+        if bmi_score > 25.0 and risk_level == "Medium":
+            risk_level = "High"
+            recommendation += " (รวมถึงค่า BMI ของคุณสูง จึงมีความเสี่ยงเพิ่มขึ้น)"
 
         return {
-            "status": "success",
-            "arch_type": arch_type,
-            "confidence_percent": round(confidence, 2),
+            "pf_severity": risk_level,
             "risk_level": risk_level,
+            "arch_type": arch_type,
             "recommendation": recommendation
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
         }
