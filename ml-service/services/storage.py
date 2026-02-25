@@ -84,38 +84,27 @@ class SupabaseStorage:
         shoes: List[Dict[str, Any]],
         foot_side: Optional[str] = None
     ):
-        """อัปเดตผลการวิเคราะห์ทั้งหมด พร้อมระบบ Debug"""
+        """อัปเดตผลการวิเคราะห์ทั้งหมด พร้อมระบบ Debug (เวอร์ชันล้างคอลัมน์เก่า)"""
         try:
             # 1. เตรียมข้อมูล JSONB
             full_analysis_data = {
                 "foot_analysis": foot_analysis,
                 "risk_factors": pf_assessment.get('risk_factors', []),
-                "measurements": foot_analysis.get('measurements', {}),
                 "foot_side": foot_side,
                 "detected_side": foot_analysis.get('detected_side'),
                 "confidence": foot_analysis.get('confidence', 0),
-                "indices": {
-                    "staheli": foot_analysis.get('staheli_index'),
-                    "chippaux": foot_analysis.get('chippaux_index'),
-                    "arch_height_ratio": foot_analysis.get('arch_height_ratio')
-                },
                 "arch_type": foot_analysis.get('arch_type')
             }
 
-            # 2. ข้อมูลที่จะอัปเดต (Full Update)
+            # 2. ข้อมูลที่จะอัปเดต (ตัดคอลัมน์คณิตศาสตร์และคะแนนเก่าทิ้งหมดแล้ว)
             update_data = {
                 "pf_severity": pf_assessment.get('severity'),
-                "pf_score": pf_assessment.get('score'),
                 "status": "completed",
                 "processed_at": datetime.utcnow().isoformat(),
                 "arch_type": foot_analysis.get('arch_type'),
-                "staheli_index": foot_analysis.get('staheli_index'),
-                "chippaux_index": foot_analysis.get('chippaux_index'),
-                "arch_height_ratio": foot_analysis.get('arch_height_ratio'),
                 "detected_side": foot_analysis.get('detected_side'),
                 "confidence": foot_analysis.get('confidence'),
-                "analysis_method": foot_analysis.get('method'),
-                "measurements": foot_analysis.get('measurements'),
+                "analysis_method": foot_analysis.get('method', 'AI_MobileNetV2'),
                 "risk_factors": pf_assessment.get('risk_factors'),
                 "analysis_result": full_analysis_data 
             }
@@ -129,19 +118,16 @@ class SupabaseStorage:
                     json=update_data
                 )
                 
-                # ✅ เพิ่ม: เช็ค Error และลอง Fallback แบบปลอดภัย
                 if response.status_code != 204:
                     error_text = response.text
                     logger.error(f"⚠️ Main update failed ({response.status_code}): {error_text}")
                     
-                    # Fallback 1: ลองส่งแค่ข้อมูลพื้นฐาน (ตัดคอลัมน์ใหม่ที่อาจจะยังไม่มีออก)
+                    # Fallback 1: ลองส่งแค่ข้อมูลพื้นฐาน
                     logger.info("🔄 Retrying with minimal data...")
                     minimal_data = {
                         "pf_severity": update_data["pf_severity"],
-                        "pf_score": update_data["pf_score"],
                         "status": "completed",
-                        "processed_at": update_data["processed_at"],
-                        # "analysis_result": full_analysis_data # ตัดออกก่อนเผื่อคอลัมน์นี้ไม่มี
+                        "processed_at": update_data["processed_at"]
                     }
                     
                     response = await client.patch(
@@ -154,7 +140,7 @@ class SupabaseStorage:
                         logger.error(f"❌ Minimal update also failed: {response.text}")
                         response.raise_for_status()
 
-                # บันทึกข้อมูลเสริม (ถ้า Scan หลักผ่านแล้ว)
+                # บันทึกข้อมูลเสริม
                 if exercises:
                     await self._save_exercises(scan_id, exercises)
                 if shoes:
@@ -164,9 +150,6 @@ class SupabaseStorage:
                 
         except Exception as e:
             logger.error(f"Error updating scan analysis: {e}")
-            # ไม่ raise เพื่อให้ระบบทำงานต่อได้ (แค่บันทึกไม่สำเร็จ) แต่ Log ไว้ดู
-            # raise e 
-
     # ✅ Helper Methods
     
     async def _save_exercises(self, scan_id: str, exercises: List[Dict]):

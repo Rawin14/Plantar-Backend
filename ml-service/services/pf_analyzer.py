@@ -1135,7 +1135,7 @@ logger = logging.getLogger(__name__)
 class PlantarFasciitisAnalyzer:
     def __init__(self):
         """
-        โหลดโมเดล AI ไว้ตั้งแต่ตอนเริ่ม Class (ตอนเปิดเซิร์ฟเวอร์)
+        โหลดโมเดล AI (MobileNetV2) ไว้ตั้งแต่ตอนเริ่ม Class (เปิดเซิร์ฟเวอร์)
         """
         BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.model_path = os.path.join(BASE_DIR, "models", "best_foot_model.h5")
@@ -1148,7 +1148,7 @@ class PlantarFasciitisAnalyzer:
                 labels_dict = ast.literal_eval(f.read())
                 # สลับเอาตัวเลขเป็น Key (เช่น 0: 'flat')
                 self.class_names = {v: k for k, v in labels_dict.items()}
-            logger.info("✅ AI Model Loaded Successfully!")
+            logger.info(f"✅ AI Model Loaded Successfully! Classes: {self.class_names}")
         except Exception as e:
             logger.error(f"❌ Failed to load model: {e}")
             self.model = None
@@ -1157,66 +1157,119 @@ class PlantarFasciitisAnalyzer:
 
     def analyze_foot_structure(self, images, user_bmi=0.0):
         """
-        รับรูปภาพมาประมวลผลด้วย AI MobileNetV2
-        (ตรงกับที่ main.py เรียกใช้ในบรรทัดที่ 127)
+        รับรูปภาพมาประมวลผลด้วยระบบดักจับ OpenCV และส่งต่อให้ AI MobileNetV2
         """
         if not images:
             raise ValueError("No images provided for analysis")
 
-        # main.py ส่งรูปมาเป็น List ของ Bytes, เราใช้รูปแรกในการวิเคราะห์
+        # ดึงรูปแรกที่ส่งเข้ามา
         image_bytes = images[0]
-        
-        # 1. แปลง Bytes เป็นรูปภาพด้วย OpenCV
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
         if img is None:
-            raise ValueError("Cannot read the image file")
+            raise ValueError("Cannot decode the image file")
 
-        # 2. เตรียมรูปภาพให้ตรงกับสเปคที่ AI ต้องการ
+        # ==========================================
+        # 🛡️ 1. Basic Quality Check (ดักรูปเสีย/รูปว่างด้วย OpenCV)
+        # ==========================================
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # 1.1 เช็คความมืด-สว่าง (Mean Brightness)
+        mean_brightness = np.mean(gray)
+        if mean_brightness < 20 or mean_brightness > 240:
+            logger.warning(f"Image rejected: Brightness out of bounds ({mean_brightness})")
+            return {
+                "arch_type": "unknown",
+                "confidence_percent": 0.0,
+                "detected_side": "unknown",
+                "message": "รูปภาพมืดหรือสว่างเกินไป มองไม่เห็นรอยเท้า"
+            }
+            
+        # 1.2 เช็คความแปรปรวนของภาพ (Standard Deviation)
+        # ถ้ารูปเป็นสีเรียบๆ (กำแพง, กระดาษเปล่า) std จะต่ำมาก
+        std_dev = np.std(gray)
+        if std_dev < 10:
+             logger.warning(f"Image rejected: Too smooth/flat ({std_dev})")
+             return {
+                "arch_type": "unknown",
+                "confidence_percent": 0.0,
+                "detected_side": "unknown",
+                "message": "รูปภาพไม่มีรายละเอียด (อาจเป็นพื้นเรียบ หรือไม่ใช่รอยเท้า)"
+            }
+
+        # ==========================================
+        # 🧠 2. AI Prediction (MobileNetV2)
+        # ==========================================
+        # เตรียมรูปให้ตรงสเปค (224x224, RGB, Normalize 0-1)
         img_resized = cv2.resize(img, (224, 224))
         img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
         img_normalized = img_rgb.astype(np.float32) / 255.0
         img_batch = np.expand_dims(img_normalized, axis=0)
 
-        # 3. ให้ AI ทำนายผล (Predict)
         if self.model:
             predictions = self.model.predict(img_batch)[0]
             best_class_idx = int(np.argmax(predictions))
-            arch_type = self.class_names.get(best_class_idx, "normal")
             confidence = float(predictions[best_class_idx]) * 100
+            
+            # 🛡️ 3. Confidence Check (ดัก AI เดามั่ว)
+            # ถ้าความมั่นใจต่ำกว่า 60% แสดงว่ารูปอาจจะดูยากหรือไม่ใช่รอยเท้า
+            if confidence < 60.0:
+                 return {
+                    "arch_type": "unknown",
+                    "confidence_percent": round(confidence, 2),
+                    "detected_side": "unknown",
+                    "message": "ระบบไม่แน่ใจว่าเป็นรอยเท้า กรุณาถ่ายใหม่อีกครั้ง"
+                }
+            
+            # ดึงชื่อประเภทเท้าจาก Dictionary (เช่น flat, normal, high)
+            arch_type = self.class_names.get(best_class_idx, "normal")
+            message = "วิเคราะห์รอยเท้าสำเร็จ"
         else:
             arch_type = "normal"
             confidence = 0.0
+            message = "ใช้ค่าเริ่มต้นเนื่องจากโหลด AI ไม่สำเร็จ"
 
         return {
             "arch_type": arch_type,
             "confidence_percent": round(confidence, 2),
-            "detected_side": "unknown" 
+            "detected_side": "unknown",
+            "message": message
         }
 
     def assess_plantar_fasciitis(self, foot_analysis, questionnaire_score, bmi_score, age, activity_level):
         """
-        ประเมินความเสี่ยงโรครองช้ำโดยเอาผลจาก AI มาคำนวณร่วมกับ BMI
-        (ตรงกับที่ main.py เรียกใช้ในบรรทัดที่ 130)
+        ประเมินความเสี่ยงโรครองช้ำโดยเอาผลจาก AI มาประมวลผลร่วมกับ BMI
         """
-        arch_type = foot_analysis.get("arch_type", "normal")
+        arch_type = foot_analysis.get("arch_type", "unknown")
         
-        # กฎการประเมินความเสี่ยงเบื้องต้น
+        # ถ้าด่านตรวจรูปตีกลับมาเป็น unknown ให้ประเมินผลเป็น error ไปเลย
+        if arch_type == "unknown":
+             return {
+                "pf_severity": "Unknown",
+                "risk_level": "Unknown",
+                "arch_type": "unknown",
+                "recommendation": foot_analysis.get("message", "รูปภาพไม่ชัดเจน ไม่สามารถประเมินได้")
+            }
+        
+        # กฎการประเมินความเสี่ยงเบื้องต้นจากรูปเท้า
         if arch_type == "flat":
             risk_level = "High"
-            recommendation = "คุณมีภาวะเท้าแบน เสี่ยงต่อโรครองช้ำ ควรใช้แผ่นรองเท้า"
+            recommendation = "คุณมีภาวะเท้าแบน เสี่ยงต่อโรครองช้ำ ควรใช้แผ่นรองเท้า (Arch Support) เพื่อช่วยพยุงอุ้งเท้า"
         elif arch_type == "high":
             risk_level = "Medium"
-            recommendation = "คุณมีอุ้งเท้าสูง เสี่ยงต่อการปวดส้นเท้า ควรใส่รองเท้าที่มีคูชั่น"
+            recommendation = "คุณมีอุ้งเท้าสูง เสี่ยงต่อการปวดส้นเท้า ควรใส่รองเท้าที่มีคูชั่น (Cushioning) นุ่มๆ รับแรงกระแทก"
         else:
             risk_level = "Low"
-            recommendation = "อุ้งเท้าของคุณปกติ แนะนำให้ยืดเหยียดกล้ามเนื้อเป็นประจำ"
+            recommendation = "อุ้งเท้าของคุณอยู่ในเกณฑ์ปกติ แนะนำให้ยืดเหยียดกล้ามเนื้อน่องและฝ่าเท้าเป็นประจำเพื่อป้องกันอาการปวด"
             
-        # ถ้า BMI มากกว่า 25 (น้ำหนักเกิน) ให้เพิ่มระดับความเสี่ยง
-        if bmi_score > 25.0 and risk_level == "Medium":
-            risk_level = "High"
-            recommendation += " (รวมถึงค่า BMI ของคุณสูง จึงมีความเสี่ยงเพิ่มขึ้น)"
+        # ผนวกข้อมูล BMI (ถ้า BMI > 25 ถือว่ามีน้ำหนักเกิน ซึ่งเพิ่มแรงกดที่ฝ่าเท้า)
+        if bmi_score > 25.0:
+            if risk_level == "Low":
+                risk_level = "Medium"
+            elif risk_level == "Medium":
+                risk_level = "High"
+            recommendation += f" (นอกจากนี้ ค่า BMI ของคุณอยู่ที่ {bmi_score:.1f} ซึ่งเกินเกณฑ์ปกติ การควบคุมน้ำหนักจะช่วยลดแรงกดที่ฝ่าเท้าได้มาก)"
 
         return {
             "pf_severity": risk_level,

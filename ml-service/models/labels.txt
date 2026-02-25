@@ -1,1 +1,1 @@
-{'flat': 0, 'high': 1, 'normal': 2}
+{'flat': 0, 'high': 1, 'invalid': 2, 'normal': 3}
