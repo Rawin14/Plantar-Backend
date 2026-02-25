@@ -172,6 +172,25 @@ async def process_scan(request: ProcessRequest, background_tasks: BackgroundTask
         logger.error(f"❌ Error queuing scan: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/scan/{scan_id}/status")
+async def get_scan_status(scan_id: str):
+    """
+    API ให้แอปมือถือทักมาถามสถานะการสแกน (เผื่อ Supabase Realtime มีปัญหา)
+    """
+    if not storage:
+        raise HTTPException(status_code=503, detail="Storage service unavailable")
+        
+    scan_data = await storage.get_scan(scan_id)
+    if not scan_data:
+        raise HTTPException(status_code=404, detail="ไม่พบข้อมูลการสแกนนี้")
+        
+    return {
+        "scan_id": scan_id,
+        "status": scan_data.get("status"), # จะตอบกลับเป็น processing, completed, หรือ failed
+        "is_completed": scan_data.get("status") == "completed",
+        "error_message": scan_data.get("error_message")
+    }
+
 # ===== Background Processing =====
 
 async def process_pf_assessment(
