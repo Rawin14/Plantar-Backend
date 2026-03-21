@@ -1,28 +1,26 @@
-# Plantar Fasciitis Analyzer Backend
+- Frontend: iOS (SwiftUI)
+- Backend & Database: Supabase (PostgreSQL, Storage)
+- ML-Service: Python (FastAPI), OpenCV, TensorFlow (MobileNetV2) ทำงานแบบ Background Task
 
-## 🔬 Medical-Grade Analysis System
+ปัจจุบันระบบแบ่งการทำงานออกเป็น 5 ฟังก์ชันหลัก ดังนี้:
 
-### Features
-- ✅ **Validated Staheli's Arch Index** (Evidence-based)
-- ✅ **Chippaux-Smirak Index** (Secondary validation)
-- ✅ **PCA-based foot alignment**
-- ✅ **Multi-modal risk assessment**
+1. ระบบจัดการข้อมูลผู้ใช้งานและการประเมินเบื้องต้น (Login & Initial Assessment)
+- ผู้ใช้กรอกข้อมูลพื้นฐาน (อายุ น้ำหนัก ส่วนสูง)
+- ระบบคำนวณค่า BMI อัตโนมัติ เพื่อนำไปเป็นตัวแปรในการประเมินความเสี่ยงโรครองช้ำ
 
-### API Endpoints
+2. ระบบสแกนและวิเคราะห์รอยเท้าด้วย AI (Foot Scan Analysis)
+- ผู้ใช้ถ่ายรูปรอยเท้าเปียกน้ำ (Wet footprint) จากมุมสูง 
+- มีระบบ Image Processing (OpenCV) คัดกรองภาพขยะ (ภาพมืดไป สว่างไป หรือไม่มีรอยเท้า) หากไม่ผ่านเกณฑ์จะแจ้งเตือนให้ถ่ายใหม่ทันที
+- หากภาพผ่านเกณฑ์ AI จะวิเคราะห์ประเภทอุ้งเท้า (เท้าแบน, เท้าปกติ, อุ้งเท้าสูง) 
+- นำผลจาก AI ไปคำนวณร่วมกับ BMI เพื่อจัดระดับความเสี่ยง (Low, Medium, High Risk)
 
-#### 1. Foot Structure Analysis
-```bash
-POST /api/v1/analyze
-Content-Type: multipart/form-data
+3. ระบบแนะนำการฟื้นฟู (Personalized Exercise Recommendation)
+- นำเสนอวิดีโอท่ากายบริหารเฉพาะบุคคล (Personalized) ตามระดับความเสี่ยงที่ได้จากการสแกน
+- มีข้อแนะนำ (Tips) การปฏิบัติตัวที่เหมาะสมกับลักษณะรูปเท้าของผู้ใช้งานแต่ละราย
 
-Parameters:
-- files: Image file(s)
+4. ระบบบันทึกไดอารี่อาการ (Daily Pain Diary)
+- ผู้ใช้สามารถบันทึกระดับความเจ็บปวด (Pain Level) ในแต่ละวัน เพื่อเก็บเป็นประวัติการรักษา
 
-Response:
-{
-  "arch_type": "normal",
-  "staheli_index": 0.75,
-  "chippaux_index": 0.68,
-  "confidence": 0.85,
-  "measurements": {...}
-}
+5. หน้าจอติดตามผล (Dashboard & Monitoring)
+- ติดตามความคืบหน้าของการทำกายภาพบำบัด
+- สรุปผลข้อมูลโดยรวม แสดงกราฟหรือค่าเฉลี่ยเปอร์เซ็นต์อาการปวด เพื่อให้ผู้ใช้เห็นแนวโน้มอาการของตนเองในระยะยาว
